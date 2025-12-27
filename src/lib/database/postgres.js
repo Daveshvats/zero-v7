@@ -165,6 +165,10 @@ export const GroupModel = {
         async setAntilink(jid, enabled) {
                 return this.setGroup(jid, { antilink: enabled });
         },
+
+        async setBanned(jid, banned = false) {
+                return this.setGroup(jid, { banned });
+        },
 };
 
 export const CommandModel = {
