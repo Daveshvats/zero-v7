@@ -391,6 +391,24 @@ class PluginManager {
                 }
 
                 try {
+                        // Check if user is banned
+                        const user = await db.UserModel.getUser(m.sender);
+                        if (user?.banned && !isOwner) {
+                                await m.reply("🚫 You are banned from using the bot");
+                                if (plugin.react) await m.react("❌");
+                                return true;
+                        }
+
+                        // Check if group is banned
+                        if (m.isGroup && !isOwner) {
+                                const group = await db.GroupModel.getGroup(m.chat);
+                                if (group?.banned) {
+                                        await m.reply("🚫 This group is banned from using the bot");
+                                        if (plugin.react) await m.react("❌");
+                                        return true;
+                                }
+                        }
+
                         const isBlocked = await db.PermissionModel.isUserBlocked(m.sender, plugin.name);
                         if (isBlocked) {
                                 await m.reply("🚫 You are blocked from using this command");

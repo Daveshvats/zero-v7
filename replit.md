@@ -9,6 +9,8 @@ Katsumi is a modular WhatsApp bot built with Baileys library. It features a plug
 - **System Packages** - Installed ImageMagick (convert command) and updated yt-dlp for latest YouTube compatibility
 - **Removed Invalid yt-dlp Options** - Cleaned up deprecated `--js-runtimes` and `--remote-components` CLI flags
 - **English Localization** - Updated all command messages to English (lolice, textimg commands)
+- **Ban System Enforcement** - Added ban check in command permission pipeline to prevent banned users/groups from executing commands
+- **Unban Command** - Created new owner-only unban plugin to disable bans for users and groups
 - Added environment validation utility for startup checks
 - Implemented structured logging with levels (debug/info/warn/error) and file output
 - Added health monitoring system for bot and clone sessions
