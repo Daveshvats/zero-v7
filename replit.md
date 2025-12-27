@@ -18,7 +18,7 @@ Katsumi is a modular WhatsApp bot built with Baileys library. It features a plug
 - **Dead Letter Queue** - Failed commands logged to `dead_letter_queue` for debugging
 - **Command Permissions** - Fine-grained access control (block users/groups, premium commands)
 - **Memory Optimization** - Aggressive cleanup at 70% heap usage, reduced message cache TTL (5 min), implemented message cache cleanup
-- **Canvas Image Commands** - 11 new fun image manipulation commands (pixelate, simp, stupid, horny, jail, triggered, wasted, passed, comment, tweet, logos)
+- **Canvas Image Commands** - 13 new fun image manipulation commands (pixelate, simp, stupid, horny, jail, triggered, wasted, passed, comment, tweet, logos, lolice, textimg)
 
 ## Database Architecture
 
