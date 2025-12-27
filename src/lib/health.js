@@ -176,8 +176,17 @@ healthMonitor.registerComponent("memory", async () => {
         const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
         const usagePercent = (usage.heapUsed / usage.heapTotal) * 100;
 
+        // Aggressive memory cleanup at 70% to prevent degradation
+        if (usagePercent > 70 && global.gc) {
+                try {
+                        global.gc();
+                } catch (e) {
+                        // gc flag may not be enabled
+                }
+        }
+
         return {
-                healthy: usagePercent < 95,
+                healthy: usagePercent < 85,
                 details: {
                         heapUsedMB,
                         heapTotalMB,
