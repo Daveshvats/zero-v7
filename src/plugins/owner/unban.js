@@ -35,7 +35,7 @@ export default {
                         return;
                 }
 
-                await GroupModel.setGroup(m.chat, { subject: groupMetadata.subject });
+                await GroupModel.setGroup(m.chat, { name: groupMetadata.subject });
                 await GroupModel.setBanned(m.chat, false);
 
                 await m.reply(

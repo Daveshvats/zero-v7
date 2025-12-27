@@ -17,6 +17,7 @@ export const groups = pgTable("groups", {
         id: serial("id").primaryKey(),
         jid: text("jid").notNull().unique(),
         name: text("name"),
+        banned: boolean("banned").default(false),
         welcome: boolean("welcome").default(false),
         welcomeMessage: text("welcome_message"),
         goodbye: boolean("goodbye").default(false),

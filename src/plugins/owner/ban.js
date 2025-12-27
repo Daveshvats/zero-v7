@@ -39,7 +39,7 @@ export default {
                 }
 
                 const group = await GroupModel.getGroup(m.chat);
-                await GroupModel.setGroup(m.chat, { subject: groupMetadata.subject });
+                await GroupModel.setGroup(m.chat, { name: groupMetadata.subject });
 
                 const newBanned = !group?.banned;
                 await GroupModel.setBanned(m.chat, newBanned);
