@@ -1,7 +1,7 @@
 modules = ["nodejs-20", "postgresql-16"]
 [nix]
 channel = "stable-25_05"
-packages = ["unzip", "ffmpeg_7", "pm2"]
+packages = ["unzip", "ffmpeg_7", "pm2", "imagemagick"]
 
 [agent]
 expertMode = true
