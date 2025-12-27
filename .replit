@@ -1,7 +1,7 @@
 modules = ["nodejs-20", "postgresql-16"]
 [nix]
 channel = "stable-25_05"
-packages = ["unzip", "ffmpeg_7"]
+packages = ["unzip", "ffmpeg_7", "pm2"]
 
 [agent]
 expertMode = true
@@ -29,3 +29,7 @@ args = "node --env-file .env src/main.js"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[deployment]
+run = ["sh", "-c", "pm2 start ecosystem.config.cjs"]
+deploymentTarget = "cloudrun"
