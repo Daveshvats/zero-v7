@@ -4,6 +4,11 @@
 Katsumi is a modular WhatsApp bot built with Baileys library. It features a plugin system, multi-session support (CloneBot), and a hybrid database architecture (PostgreSQL + Redis).
 
 ## Recent Changes (December 27, 2025)
+- **YouTube Downloader Fix** - Implemented fallback format options to handle YouTube signature extraction failures
+- **Media Conversion Improvements** - Enhanced error handling in sticker/media conversion with proper file cleanup
+- **System Packages** - Installed ImageMagick (convert command) and updated yt-dlp for latest YouTube compatibility
+- **Removed Invalid yt-dlp Options** - Cleaned up deprecated `--js-runtimes` and `--remote-components` CLI flags
+- **English Localization** - Updated all command messages to English (lolice, textimg commands)
 - Added environment validation utility for startup checks
 - Implemented structured logging with levels (debug/info/warn/error) and file output
 - Added health monitoring system for bot and clone sessions
