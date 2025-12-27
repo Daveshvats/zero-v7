@@ -137,14 +137,10 @@ export default {
                                 throw new Error("Failed to generate logo");
                         }
 
-                        await sock.sendMessage(
-                                m.chat,
-                                {
-                                        image: { url: result.image },
-                                        caption: `✨ *Logo Created!*\n🎨 Effect: ${selectedEffect.title}\n📝 Text: ${text}`,
-                                },
-                                { quoted: m.msg }
-                        );
+                        await m.reply({
+                                image: { url: result.image },
+                                caption: `✨ *Logo Created!*\n🎨 Effect: ${selectedEffect.title}\n📝 Text: ${text}`,
+                        });
                 } catch (e) {
                         console.error("[logos ERROR]:", e);
                         m.reply(`❌ Failed to create logo: ${e.message}\n\nTry a different effect or try again later.`);
