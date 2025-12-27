@@ -13,6 +13,7 @@ class HealthMonitor extends EventEmitter {
                 this.components = new Map();
                 this.checkInterval = null;
                 this.lastCheck = null;
+                this.lastOverallStatus = null;
         }
 
         registerComponent(name, healthCheck) {
@@ -132,11 +133,22 @@ class HealthMonitor extends EventEmitter {
                 }
 
                 this.checkInterval = setInterval(async () => {
-                        const results = await this.checkAll();
+                        await this.checkAll();
                         const overall = this.getOverallStatus();
 
-                        if (overall !== HEALTH_STATUS.HEALTHY) {
-                                print.warn(`Health check: ${overall}`, JSON.stringify(results));
+                        if (overall !== this.lastOverallStatus) {
+                                if (overall === HEALTH_STATUS.HEALTHY) {
+                                        print.info("Health check: recovered to healthy");
+                                } else {
+                                        const unhealthyComponents = [];
+                                        for (const [name, comp] of this.components) {
+                                                if (comp.status !== HEALTH_STATUS.HEALTHY) {
+                                                        unhealthyComponents.push(`${name}: ${comp.lastError || "degraded"}`);
+                                                }
+                                        }
+                                        print.warn(`Health check: ${overall} [${unhealthyComponents.join(", ")}]`);
+                                }
+                                this.lastOverallStatus = overall;
                         }
                 }, intervalMs);
 
