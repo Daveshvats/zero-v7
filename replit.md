@@ -33,9 +33,14 @@ Redis (In-Memory Cache) - Optional via Upstash
 ```
 
 ### Database Priority
-1. **PostgreSQL** (if `DATABASE_URL` is set) - Recommended
-2. **MongoDB** (if `USE_MONGO=true`)
-3. **Local JSON** (fallback)
+1. **PostgreSQL** (if `DATABASE_URL` is set) - Default and Recommended
+2. **MongoDB** (if `AUTH_STORE=mongodb`)
+3. **MySQL** (if `AUTH_STORE=mysql`)
+4. **Local JSON** (fallback)
+
+### Auth State Storage
+By default, WhatsApp session credentials are stored in PostgreSQL (table: `auth_state`).
+To use a different backend, set `AUTH_STORE` to: `postgres`, `mongodb`, `mysql`, or `local`.
 
 ## Project Architecture
 
@@ -72,9 +77,9 @@ src/
 ### Database (PostgreSQL - Recommended)
 - `DATABASE_URL` - PostgreSQL connection string (auto-provided by Replit)
 
-### Database (MongoDB - for CloneBot)
-- `MONGO_URI` - MongoDB connection string
-- `USE_MONGO=true` - Enable MongoDB for session auth
+### Database (MongoDB - Legacy/Optional)
+- `MONGO_URI` - MongoDB connection string (optional, for backward compatibility)
+- `AUTH_STORE=mongodb` - Force MongoDB for session auth (default is PostgreSQL)
 
 ### Redis (Optional - Upstash)
 - `UPSTASH_REDIS_REST_URL` - Upstash Redis URL
