@@ -1,0 +1,191 @@
+import print from "#lib/print";
+import { EventEmitter } from "events";
+
+const HEALTH_STATUS = {
+        HEALTHY: "healthy",
+        DEGRADED: "degraded",
+        UNHEALTHY: "unhealthy",
+};
+
+class HealthMonitor extends EventEmitter {
+        constructor() {
+                super();
+                this.components = new Map();
+                this.checkInterval = null;
+                this.lastCheck = null;
+        }
+
+        registerComponent(name, healthCheck) {
+                this.components.set(name, {
+                        name,
+                        healthCheck,
+                        status: HEALTH_STATUS.HEALTHY,
+                        lastCheck: null,
+                        lastError: null,
+                        consecutiveFailures: 0,
+                });
+                print.debug(`Health component registered: ${name}`);
+        }
+
+        unregisterComponent(name) {
+                this.components.delete(name);
+                print.debug(`Health component unregistered: ${name}`);
+        }
+
+        async checkComponent(name) {
+                const component = this.components.get(name);
+                if (!component) {
+                        return null;
+                }
+
+                try {
+                        const startTime = Date.now();
+                        const result = await Promise.race([
+                                component.healthCheck(),
+                                new Promise((_, reject) =>
+                                        setTimeout(() => reject(new Error("Health check timeout")), 5000)
+                                ),
+                        ]);
+
+                        const duration = Date.now() - startTime;
+
+                        component.status = result.healthy
+                                ? HEALTH_STATUS.HEALTHY
+                                : HEALTH_STATUS.DEGRADED;
+                        component.lastCheck = new Date().toISOString();
+                        component.lastError = null;
+                        component.consecutiveFailures = 0;
+                        component.responseTime = duration;
+                        component.details = result.details || {};
+
+                        return component;
+                } catch (error) {
+                        component.status = HEALTH_STATUS.UNHEALTHY;
+                        component.lastCheck = new Date().toISOString();
+                        component.lastError = error.message;
+                        component.consecutiveFailures++;
+
+                        if (component.consecutiveFailures >= 3) {
+                                this.emit("critical", {
+                                        component: name,
+                                        error: error.message,
+                                        failures: component.consecutiveFailures,
+                                });
+                        }
+
+                        return component;
+                }
+        }
+
+        async checkAll() {
+                const results = {};
+
+                for (const [name] of this.components) {
+                        results[name] = await this.checkComponent(name);
+                }
+
+                this.lastCheck = new Date().toISOString();
+                return results;
+        }
+
+        getOverallStatus() {
+                let overall = HEALTH_STATUS.HEALTHY;
+
+                for (const [, component] of this.components) {
+                        if (component.status === HEALTH_STATUS.UNHEALTHY) {
+                                return HEALTH_STATUS.UNHEALTHY;
+                        }
+                        if (component.status === HEALTH_STATUS.DEGRADED) {
+                                overall = HEALTH_STATUS.DEGRADED;
+                        }
+                }
+
+                return overall;
+        }
+
+        getHealthReport() {
+                const components = {};
+
+                for (const [name, component] of this.components) {
+                        components[name] = {
+                                status: component.status,
+                                lastCheck: component.lastCheck,
+                                lastError: component.lastError,
+                                consecutiveFailures: component.consecutiveFailures,
+                                responseTime: component.responseTime,
+                                details: component.details,
+                        };
+                }
+
+                return {
+                        status: this.getOverallStatus(),
+                        timestamp: new Date().toISOString(),
+                        uptime: process.uptime(),
+                        memory: process.memoryUsage(),
+                        components,
+                };
+        }
+
+        startPeriodicChecks(intervalMs = 60000) {
+                if (this.checkInterval) {
+                        clearInterval(this.checkInterval);
+                }
+
+                this.checkInterval = setInterval(async () => {
+                        const results = await this.checkAll();
+                        const overall = this.getOverallStatus();
+
+                        if (overall !== HEALTH_STATUS.HEALTHY) {
+                                print.warn(`Health check: ${overall}`, JSON.stringify(results));
+                        }
+                }, intervalMs);
+
+                if (this.checkInterval.unref) {
+                        this.checkInterval.unref();
+                }
+
+                print.info(`Health monitoring started (interval: ${intervalMs}ms)`);
+        }
+
+        stopPeriodicChecks() {
+                if (this.checkInterval) {
+                        clearInterval(this.checkInterval);
+                        this.checkInterval = null;
+                        print.info("Health monitoring stopped");
+                }
+        }
+}
+
+const healthMonitor = new HealthMonitor();
+
+healthMonitor.registerComponent("memory", async () => {
+        const usage = process.memoryUsage();
+        const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
+        const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
+        const usagePercent = (usage.heapUsed / usage.heapTotal) * 100;
+
+        return {
+                healthy: usagePercent < 90,
+                details: {
+                        heapUsedMB,
+                        heapTotalMB,
+                        usagePercent: Math.round(usagePercent),
+                },
+        };
+});
+
+healthMonitor.registerComponent("eventLoop", async () => {
+        const start = Date.now();
+        await new Promise((resolve) => setImmediate(resolve));
+        const lag = Date.now() - start;
+
+        return {
+                healthy: lag < 100,
+                details: {
+                        lagMs: lag,
+                },
+        };
+});
+
+export { HealthMonitor, HEALTH_STATUS };
+export default healthMonitor;
