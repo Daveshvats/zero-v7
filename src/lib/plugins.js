@@ -350,13 +350,44 @@ class PluginManager {
                         (typeof sock !== "undefined" && sock.isClonebot);
 
                 let isGroupAdmin = false;
-                if (m.isGroup && m.metadata?.participants) {
-                        const participant = m.metadata.participants.find(
-                                (p) => p.id === m.sender
-                        );
-                        isGroupAdmin =
-                                participant?.admin === "admin" ||
-                                participant?.admin === "superadmin";
+                if (m.isGroup) {
+                        try {
+                                let metadata = m.metadata;
+                                
+                                // If metadata missing, fetch it
+                                if (!metadata?.participants || metadata.participants.length === 0) {
+                                        try {
+                                                metadata = await sock.groupMetadata(m.chat);
+                                                if (metadata) {
+                                                        m.metadata = metadata;
+                                                }
+                                        } catch (fetchErr) {
+                                                print.debug(`Failed to fetch group metadata: ${fetchErr.message}`);
+                                        }
+                                }
+                                
+                                // Normalize sender JID for comparison
+                                const normalizedSender = m.sender.includes("@") 
+                                        ? m.sender 
+                                        : m.sender + "@s.whatsapp.net";
+                                
+                                if (metadata?.participants) {
+                                        // Find participant with normalized JID matching
+                                        const participant = metadata.participants.find((p) => {
+                                                const normalizedId = p.id.includes("@") 
+                                                        ? p.id 
+                                                        : p.id + "@s.whatsapp.net";
+                                                return normalizedId === normalizedSender || p.id === m.sender;
+                                        });
+                                        
+                                        isGroupAdmin =
+                                                participant?.admin === "admin" ||
+                                                participant?.admin === "superadmin";
+                                }
+                        } catch (adminCheckErr) {
+                                print.debug(`Admin check error: ${adminCheckErr.message}`);
+                                isGroupAdmin = false;
+                        }
                 }
 
                 try {
