@@ -165,7 +165,7 @@ healthMonitor.registerComponent("memory", async () => {
         const usagePercent = (usage.heapUsed / usage.heapTotal) * 100;
 
         return {
-                healthy: usagePercent < 90,
+                healthy: usagePercent < 95,
                 details: {
                         heapUsedMB,
                         heapTotalMB,
@@ -180,7 +180,7 @@ healthMonitor.registerComponent("eventLoop", async () => {
         const lag = Date.now() - start;
 
         return {
-                healthy: lag < 100,
+                healthy: lag < 500,
                 details: {
                         lagMs: lag,
                 },

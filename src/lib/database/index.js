@@ -1,12 +1,49 @@
-const useLocal = process.env.USE_MONGO !== "true";
+import print from "#lib/print";
 
-let SettingsModel, UserModel, GroupModel, SessionModel;
+const usePostgres = process.env.USE_POSTGRES === "true" || process.env.DATABASE_URL;
+const useMongo = process.env.USE_MONGO === "true";
+const useLocal = !usePostgres && !useMongo;
 
-if (useLocal) {
+let SettingsModel, UserModel, GroupModel, SessionModel, CommandModel, AITaskModel;
+let dbType = "local";
+
+async function initDatabase() {
+	if (usePostgres) {
+		try {
+			const postgres = await import("#lib/database/postgres");
+			await postgres.initPostgres();
+			
+			SettingsModel = postgres.SettingsModel;
+			UserModel = postgres.UserModel;
+			GroupModel = postgres.GroupModel;
+			SessionModel = postgres.SessionModel;
+			CommandModel = postgres.CommandModel;
+			AITaskModel = postgres.AITaskModel;
+			dbType = "postgresql";
+			
+			print.info("Database: PostgreSQL initialized");
+			return;
+		} catch (error) {
+			print.warn("PostgreSQL initialization failed, falling back:", error.message);
+		}
+	}
+
+	if (useMongo) {
+		try {
+			SettingsModel = (await import("#lib/database/models/settings")).default;
+			UserModel = (await import("#lib/database/models/user")).default;
+			GroupModel = (await import("#lib/database/models/group")).default;
+			SessionModel = (await import("#lib/database/models/session")).default;
+			dbType = "mongodb";
+			
+			print.info("Database: MongoDB initialized");
+			return;
+		} catch (error) {
+			print.warn("MongoDB initialization failed, falling back:", error.message);
+		}
+	}
+
 	const localDB = (await import("#lib/database/local")).default;
-
-	// Optional: Enable autosave
-	// localDB.savePeriodically();
 
 	SettingsModel = {
 		async getSettings() {
@@ -40,29 +77,21 @@ if (useLocal) {
 		},
 		async setUser(id, data) {
 			await localDB.initialize();
-			localDB.users.set(id, data);
+			const existing = localDB.users.get(id) || {};
+			localDB.users.set(id, { ...existing, ...data });
 			localDB.save();
 		},
 		async setName(id, name) {
-			const user = await this.getUser(id);
-			user.name = name;
-			await this.setUser(id, user);
+			await this.setUser(id, { name });
 		},
 		async setBanned(id, banned = false) {
-			const user = await this.getUser(id);
-			user.banned = banned;
-			await this.setUser(id, user);
+			await this.setUser(id, { banned });
 		},
 		async setPremium(id, premium = false, expired = 0) {
-			const user = await this.getUser(id);
-			user.premium = premium;
-			user.premium_expired = expired;
-			await this.setUser(id, user);
+			await this.setUser(id, { premium, premium_expired: expired });
 		},
 		async setLimit(id, limit = 0) {
-			const user = await this.getUser(id);
-			user.limit = limit;
-			await this.setUser(id, user);
+			await this.setUser(id, { limit });
 		},
 	};
 
@@ -71,27 +100,63 @@ if (useLocal) {
 			await localDB.initialize();
 			return localDB.groups.get(id) || {};
 		},
+		async getAllGroups() {
+			await localDB.initialize();
+			if (typeof localDB.groups.values === "function") {
+				return Array.from(localDB.groups.values());
+			}
+			return Object.values(localDB.groups);
+		},
 		async setGroup(id, data) {
 			await localDB.initialize();
-			localDB.groups.set(id, data);
+			const existing = localDB.groups.get(id) || {};
+			localDB.groups.set(id, { ...existing, ...data });
 			localDB.save();
 		},
 		async setName(id, name) {
-			const group = await this.getGroup(id);
-			group.name = name;
-			await this.setGroup(id, group);
+			await this.setGroup(id, { name });
 		},
 		async setBanned(id, banned = true) {
-			const group = await this.getGroup(id);
-			group.banned = banned;
-			await this.setGroup(id, group);
+			await this.setGroup(id, { banned });
 		},
 	};
-} else {
-	SettingsModel = (await import("#lib/database/models/settings")).default;
-	UserModel = (await import("#lib/database/models/user")).default;
-	GroupModel = (await import("#lib/database/models/group")).default;
-	SessionModel = (await import("#lib/database/models/session")).default;
+
+	CommandModel = {
+		async logCommand() {
+			return null;
+		},
+		async getCommandStats() {
+			return [];
+		},
+		async getUserCommands() {
+			return [];
+		},
+	};
+
+	AITaskModel = {
+		async createTask() {
+			return null;
+		},
+		async updateTask() {
+			return null;
+		},
+		async completeTask() {
+			return null;
+		},
+		async failTask() {
+			return null;
+		},
+		async getUserTasks() {
+			return [];
+		},
+	};
+
+	dbType = "local";
+	print.info("Database: Local JSON initialized");
 }
 
-export { SettingsModel, UserModel, GroupModel, SessionModel };
+export function getDatabaseType() {
+	return dbType;
+}
+
+export { initDatabase, SettingsModel, UserModel, GroupModel, SessionModel, CommandModel, AITaskModel };

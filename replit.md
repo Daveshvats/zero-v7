@@ -1,7 +1,7 @@
 # Katsumi WhatsApp Bot
 
 ## Overview
-Katsumi is a modular WhatsApp bot built with Baileys library. It features a plugin system, multi-session support (CloneBot), and database abstraction (MongoDB/MySQL/Local JSON).
+Katsumi is a modular WhatsApp bot built with Baileys library. It features a plugin system, multi-session support (CloneBot), and a hybrid database architecture (PostgreSQL + Redis).
 
 ## Recent Changes (December 27, 2025)
 - Added environment validation utility for startup checks
@@ -10,6 +10,32 @@ Katsumi is a modular WhatsApp bot built with Baileys library. It features a plug
 - Created metrics collection system for observability
 - Improved graceful shutdown with proper cleanup handlers
 - Updated PM2 config with log rotation and memory limits
+- **NEW: PostgreSQL + Redis hybrid database architecture**
+- Fixed command prefix handling (only registered commands are processed)
+
+## Database Architecture
+
+### Hybrid Setup (PostgreSQL + Redis)
+```
+PostgreSQL (Persistent Storage)
+├── users          - User profiles, bans, premium status
+├── groups         - Group settings, welcome messages
+├── commands       - Command usage analytics
+├── ai_tasks       - AI task history and results
+├── settings       - Bot configuration
+└── sessions       - Clone session management
+
+Redis (In-Memory Cache) - Optional via Upstash
+├── cooldowns      - Command cooldown tracking
+├── sessions       - Quick session lookups
+├── rate_limits    - Rate limiting counters
+└── job_states     - Real-time job tracking
+```
+
+### Database Priority
+1. **PostgreSQL** (if `DATABASE_URL` is set) - Recommended
+2. **MongoDB** (if `USE_MONGO=true`)
+3. **Local JSON** (fallback)
 
 ## Project Architecture
 
@@ -22,19 +48,13 @@ src/
 │   ├── auth/         # Authentication (MongoDB, state management)
 │   ├── clonebot/     # Multi-session support
 │   ├── database/     # Database abstraction layer
-│   │   └── models/   # Data models (user, group, session, settings)
+│   │   ├── models/   # MongoDB models
+│   │   ├── schema.js # PostgreSQL schema (Drizzle)
+│   │   └── postgres.js # PostgreSQL models
+│   ├── redis/        # Redis caching service
 │   ├── schema/       # Validation schemas
 │   └── scrapers/     # Web scrapers
 ├── plugins/          # Bot commands organized by category
-│   ├── _auto/        # Auto-run plugins
-│   ├── ai/           # AI-related commands
-│   ├── convert/      # Media conversion
-│   ├── downloader/   # Social media downloaders
-│   ├── group/        # Group management
-│   ├── info/         # Information commands
-│   ├── misc/         # Miscellaneous commands
-│   ├── owner/        # Owner-only commands
-│   └── tools/        # Utility tools
 └── utils/            # General utilities
 ```
 
@@ -45,25 +65,29 @@ src/
 - **Health Monitor** (`src/lib/health.js`): Component health checks
 - **Metrics Collector** (`src/lib/metrics.js`): Performance and usage metrics
 - **Graceful Shutdown** (`src/lib/gracefulShutdown.js`): Clean shutdown handling
+- **Redis Service** (`src/lib/redis/index.js`): Caching, cooldowns, rate limiting
 
-### Database Support
-- MongoDB (preferred for CloneBot)
-- MySQL (via mysql-baileys)
-- Local JSON files (default fallback)
+## Environment Variables
 
-### Environment Variables
-Required for MongoDB mode:
+### Database (PostgreSQL - Recommended)
+- `DATABASE_URL` - PostgreSQL connection string (auto-provided by Replit)
+
+### Database (MongoDB - for CloneBot)
 - `MONGO_URI` - MongoDB connection string
-- `USE_MONGO=true` - Enable MongoDB
+- `USE_MONGO=true` - Enable MongoDB for session auth
 
-Required for authentication:
+### Redis (Optional - Upstash)
+- `UPSTASH_REDIS_REST_URL` - Upstash Redis URL
+- `UPSTASH_REDIS_REST_TOKEN` - Upstash Redis token
+
+### Bot Configuration
 - `BOT_NUMBER` - Phone number for pairing code authentication
 - `QR=true` - Use QR code authentication instead
-
-Optional:
 - `BOT_SESSION_NAME` - Session name (default: "sessions")
 - `BOT_PREFIXES` - Command prefixes (default: "!")
 - `OWNER_JIDS` - Owner phone numbers
+
+### Logging
 - `LOG_LEVEL` - Logging level (DEBUG, INFO, WARN, ERROR)
 - `LOG_TO_FILE` - Enable file logging
 
@@ -79,7 +103,13 @@ node --env-file .env src/main.js
 pm2 start ecosystem.config.cjs
 ```
 
+### Database Migrations
+```bash
+npx drizzle-kit push --force
+```
+
 ## User Preferences
 - Keep code modular with plugin-based architecture
 - Follow existing ESLint/Prettier configuration
 - Use tabs for indentation
+- PostgreSQL + Redis for production deployments
