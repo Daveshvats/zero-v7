@@ -357,7 +357,7 @@ class PluginManager {
                                 // If metadata missing, fetch it
                                 if (!metadata?.participants || metadata.participants.length === 0) {
                                         try {
-                                                metadata = await sock.groupMetadata(m.chat);
+                                                metadata = await sock.groupMetadata(m.from);
                                                 if (metadata) {
                                                         m.metadata = metadata;
                                                 }
@@ -401,7 +401,7 @@ class PluginManager {
 
                         // Check if group is banned
                         if (m.isGroup && !isOwner) {
-                                const group = await db.GroupModel.getGroup(m.chat);
+                                const group = await db.GroupModel.getGroup(m.from);
                                 if (group?.banned) {
                                         await m.reply("🚫 This group is banned from using the bot");
                                         if (plugin.react) await m.react("❌");
@@ -417,7 +417,7 @@ class PluginManager {
                         }
 
                         if (m.isGroup) {
-                                const groupDisabled = await db.PermissionModel.isGroupDisabled(m.chat, plugin.name);
+                                const groupDisabled = await db.PermissionModel.isGroupDisabled(m.from, plugin.name);
                                 if (groupDisabled) {
                                         await m.reply("🚫 This command is disabled in this group");
                                         if (plugin.react) await m.react("❌");
@@ -627,7 +627,7 @@ class PluginManager {
                                 await db.DeadLetterModel.addFailed(
                                         plugin.name,
                                         m.sender,
-                                        m.isGroup ? m.chat : null,
+                                        m.isGroup ? m.from : null,
                                         m.text || "",
                                         error.message || "Unknown error",
                                         error.stack || null,

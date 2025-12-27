@@ -35,7 +35,7 @@ export default {
                         return;
                 }
 
-                await GroupModel.setGroup(m.chat, { name: groupMetadata.subject, banned: false });
+                await GroupModel.setGroup(m.from, { name: groupMetadata.subject, banned: false });
 
                 await m.reply(
                         `Unbanchat is now disabled for ${groupMetadata.subject}`

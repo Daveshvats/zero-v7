@@ -11,7 +11,7 @@ Katsumi is a modular WhatsApp bot built with Baileys library. It features a plug
 - **English Localization** - Updated all command messages to English (lolice, textimg commands)
 - **Ban System Enforcement** - Added ban check in command permission pipeline to prevent banned users/groups from executing commands
 - **Unban Command** - Created new owner-only unban plugin to disable bans for users and groups
-- **Fixed Ban Plugin** - Corrected JID field usage (m.chat instead of m.from) and added `banned` column to groups schema
+- **Fixed Ban Plugin** - Corrected JID field usage (changed `m.chat` to `m.from` - the actual property in serialize.js) and added `banned` column to groups schema
 - Added environment validation utility for startup checks
 - Implemented structured logging with levels (debug/info/warn/error) and file output
 - Added health monitoring system for bot and clone sessions
