@@ -10,26 +10,35 @@ Katsumi is a modular WhatsApp bot built with Baileys library. It features a plug
 - Created metrics collection system for observability
 - Improved graceful shutdown with proper cleanup handlers
 - Updated PM2 config with log rotation and memory limits
-- **NEW: PostgreSQL + Redis hybrid database architecture**
+- **PostgreSQL + Redis hybrid database architecture**
 - Fixed command prefix handling (only registered commands are processed)
+- **DB Connection Pooling** - Optimized pool (min=2, max=10, 30s idle timeout)
+- **Redis TTL** - All keys auto-expire (jobs: 1h, sessions: 1h, DLQ: 7d)
+- **Migration Versioning** - Track applied migrations in `migrations` table
+- **Dead Letter Queue** - Failed commands logged to `dead_letter_queue` for debugging
+- **Command Permissions** - Fine-grained access control (block users/groups, premium commands)
 
 ## Database Architecture
 
 ### Hybrid Setup (PostgreSQL + Redis)
 ```
 PostgreSQL (Persistent Storage)
-├── users          - User profiles, bans, premium status
-├── groups         - Group settings, welcome messages
-├── commands       - Command usage analytics
-├── ai_tasks       - AI task history and results
-├── settings       - Bot configuration
-└── sessions       - Clone session management
+├── users            - User profiles, bans, premium status
+├── groups           - Group settings, welcome messages
+├── commands         - Command usage analytics
+├── ai_tasks         - AI task history and results
+├── settings         - Bot configuration
+├── sessions         - Clone session management
+├── migrations       - Schema version tracking
+├── dead_letter_queue - Failed command logs for debugging
+└── permissions      - Fine-grained access control
 
 Redis (In-Memory Cache) - Optional via Upstash
-├── cooldowns      - Command cooldown tracking
-├── sessions       - Quick session lookups
-├── rate_limits    - Rate limiting counters
-└── job_states     - Real-time job tracking
+├── cooldowns      - Command cooldown tracking (TTL: 1h)
+├── sessions       - Quick session lookups (TTL: 1h)
+├── rate_limits    - Rate limiting counters (TTL: 60s)
+├── job_states     - Real-time job tracking (TTL: 1h)
+└── dlq:*          - Dead letter queue backup (TTL: 7d)
 ```
 
 ### Database Priority
@@ -111,6 +120,42 @@ pm2 start ecosystem.config.cjs
 ### Database Migrations
 ```bash
 npx drizzle-kit push --force
+```
+
+## Command Permissions System
+
+Plugins can define permission levels:
+```javascript
+export default {
+  name: "ban",
+  commands: ["ban"],
+  owner: true,      // Owner-only
+  premium: true,    // Premium users only
+  permissions: "admin", // Group admin only
+}
+```
+
+Database permissions allow runtime overrides:
+- `PermissionModel.grantPermission(jid, "user", "premium")` - Grant premium to user
+- `PermissionModel.grantPermission(jid, "user", "blocked", {commandName: "ai"})` - Block user from command
+- `PermissionModel.grantPermission(groupJid, "group", "disabled", {commandName: "sticker"})` - Disable command in group
+- `PermissionModel.isUserBlocked(jid, commandName)` - Check if user is blocked
+- `PermissionModel.isGroupDisabled(groupJid, commandName)` - Check if command disabled in group
+- `PermissionModel.isPremium(jid)` - Check if user has premium
+
+## Dead Letter Queue
+
+Failed commands are automatically logged for debugging:
+```javascript
+// View recent failures
+const failures = await db.DeadLetterModel.getRecent(50);
+
+// Get stats
+const stats = await db.DeadLetterModel.getStats();
+// { total: 10, unresolved: 3, lastHour: 1 }
+
+// Mark as resolved
+await db.DeadLetterModel.resolve(id);
 ```
 
 ## User Preferences

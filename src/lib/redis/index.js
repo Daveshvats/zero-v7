@@ -6,6 +6,14 @@ let useMemoryFallback = false;
 const memoryCache = new Map();
 const memoryTTL = new Map();
 
+const DEFAULT_TTL = {
+        JOB: 3600,
+        SESSION: 3600,
+        COOLDOWN: 3600,
+        RATE_LIMIT: 60,
+        DEAD_LETTER: 86400 * 7,
+};
+
 export async function initRedis() {
         const url = process.env.UPSTASH_REDIS_REST_URL;
         const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -50,17 +58,12 @@ export const cache = {
                 return memoryCache.get(key) || null;
         },
 
-        async set(key, value, ttlSeconds = null) {
+        async set(key, value, ttlSeconds = DEFAULT_TTL.JOB) {
                 if (redis) {
-                        if (ttlSeconds) {
-                                return redis.setex(key, ttlSeconds, value);
-                        }
-                        return redis.set(key, value);
+                        return redis.setex(key, ttlSeconds, value);
                 }
                 memoryCache.set(key, value);
-                if (ttlSeconds) {
-                        memoryTTL.set(key, Date.now() + ttlSeconds * 1000);
-                }
+                memoryTTL.set(key, Date.now() + ttlSeconds * 1000);
                 return "OK";
         },
 
@@ -118,13 +121,16 @@ export const cache = {
                 return hash?.[field] || null;
         },
 
-        async hset(key, field, value) {
+        async hset(key, field, value, ttlSeconds = DEFAULT_TTL.JOB) {
                 if (redis) {
-                        return redis.hset(key, { [field]: value });
+                        await redis.hset(key, { [field]: value });
+                        await redis.expire(key, ttlSeconds);
+                        return 1;
                 }
                 const hash = memoryCache.get(key) || {};
                 hash[field] = value;
                 memoryCache.set(key, hash);
+                memoryTTL.set(key, Date.now() + ttlSeconds * 1000);
                 return 1;
         },
 
@@ -209,7 +215,7 @@ export const sessionCache = {
                 return data ? (typeof data === "string" ? JSON.parse(data) : data) : null;
         },
 
-        async setSession(sessionName, data, ttlSeconds = 3600) {
+        async setSession(sessionName, data, ttlSeconds = DEFAULT_TTL.SESSION) {
                 const key = this.getKey(sessionName);
                 await cache.set(key, JSON.stringify(data), ttlSeconds);
         },
@@ -225,9 +231,9 @@ export const jobQueue = {
                 return `job:${jobType}`;
         },
 
-        async addJob(jobType, jobId, data) {
+        async addJob(jobType, jobId, data, ttlSeconds = DEFAULT_TTL.JOB) {
                 const key = `${this.getKey(jobType)}:${jobId}`;
-                await cache.set(key, JSON.stringify({ ...data, status: "pending", createdAt: Date.now() }));
+                await cache.set(key, JSON.stringify({ ...data, status: "pending", createdAt: Date.now() }), ttlSeconds);
                 return jobId;
         },
 
@@ -237,20 +243,60 @@ export const jobQueue = {
                 return data ? (typeof data === "string" ? JSON.parse(data) : data) : null;
         },
 
-        async updateJob(jobType, jobId, updates) {
+        async updateJob(jobType, jobId, updates, ttlSeconds = DEFAULT_TTL.JOB) {
                 const key = `${this.getKey(jobType)}:${jobId}`;
                 const current = await this.getJob(jobType, jobId);
                 if (current) {
-                        await cache.set(key, JSON.stringify({ ...current, ...updates, updatedAt: Date.now() }));
+                        await cache.set(key, JSON.stringify({ ...current, ...updates, updatedAt: Date.now() }), ttlSeconds);
                 }
         },
 
         async completeJob(jobType, jobId, result = null) {
-                await this.updateJob(jobType, jobId, { status: "completed", result, completedAt: Date.now() });
+                await this.updateJob(jobType, jobId, { status: "completed", result, completedAt: Date.now() }, DEFAULT_TTL.JOB);
         },
 
         async failJob(jobType, jobId, error) {
-                await this.updateJob(jobType, jobId, { status: "failed", error, failedAt: Date.now() });
+                await this.updateJob(jobType, jobId, { status: "failed", error, failedAt: Date.now() }, DEFAULT_TTL.JOB);
+        },
+};
+
+export const deadLetterQueue = {
+        getKey() {
+                return "dlq:failed_commands";
+        },
+
+        async addFailedCommand(data) {
+                const key = `${this.getKey()}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+                await cache.set(key, JSON.stringify({
+                        ...data,
+                        failedAt: Date.now(),
+                }), DEFAULT_TTL.DEAD_LETTER);
+                return key;
+        },
+
+        async getFailedCommands(limit = 50) {
+                const keys = await cache.keys("dlq:failed_commands:*");
+                const commands = [];
+                for (const key of keys.slice(0, limit)) {
+                        const data = await cache.get(key);
+                        if (data) {
+                                commands.push(typeof data === "string" ? JSON.parse(data) : data);
+                        }
+                }
+                return commands.sort((a, b) => b.failedAt - a.failedAt);
+        },
+
+        async clearOldEntries() {
+                const keys = await cache.keys("dlq:failed_commands:*");
+                let cleared = 0;
+                for (const key of keys) {
+                        const ttl = await cache.ttl(key);
+                        if (ttl === -2) {
+                                await cache.del(key);
+                                cleared++;
+                        }
+                }
+                return cleared;
         },
 };
 
@@ -258,12 +304,16 @@ export function isRedisConnected() {
         return redis !== null && !useMemoryFallback;
 }
 
+export { DEFAULT_TTL };
+
 export default {
         cache,
         cooldownService,
         rateLimitService,
         sessionCache,
         jobQueue,
+        deadLetterQueue,
         initRedis,
         isRedisConnected,
+        DEFAULT_TTL,
 };
