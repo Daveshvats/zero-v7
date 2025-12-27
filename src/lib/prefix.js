@@ -3,7 +3,7 @@ import { BOT_CONFIG } from "#config/index";
 export let allCmd = [];
 
 export function setAllCommands(list) {
-	allCmd = (list || []).map((cmd) => cmd.toLowerCase());
+        allCmd = (list || []).map((cmd) => cmd.toLowerCase());
 }
 
 /*
@@ -15,45 +15,49 @@ export function setAllCommands(list) {
  * @returns {{prefix: string, isCommand: boolean, command: string, args: string[], text: string}} An object containing prefix, isCommand, command, args, and text.
  */
 export function getPrefix(body, m) {
-	const isOwner = m.isOwner;
-	const prefixes = (BOT_CONFIG.prefixes || []).filter(Boolean);
+        const isOwner = m.isOwner;
+        const prefixes = (BOT_CONFIG.prefixes || []).filter(Boolean);
 
-	let prefix = "";
-	let isCommand = false;
-	let command = "";
-	let args = [];
-	let text = "";
+        let prefix = "";
+        let isCommand = false;
+        let command = "";
+        let args = [];
+        let text = "";
 
-	if (!body) {
-		return { prefix, isCommand, command, args, text };
-	}
+        if (!body) {
+                return { prefix, isCommand, command, args, text };
+        }
 
-	const sortedPrefixes = prefixes.slice().sort((a, b) => b.length - a.length);
+        const sortedPrefixes = prefixes.slice().sort((a, b) => b.length - a.length);
 
-	for (const p of sortedPrefixes) {
-		if (body.startsWith(p)) {
-			prefix = p;
-			isCommand = true;
-			break;
-		}
-	}
+        for (const p of sortedPrefixes) {
+                if (body.startsWith(p)) {
+                        prefix = p;
+                        break;
+                }
+        }
 
-	if (!isCommand && isOwner && sortedPrefixes.length && allCmd.length) {
-		const parts = body.trim().split(/\s+/);
-		const possibleCmd = (parts[0] || "").toLowerCase();
-		if (allCmd.includes(possibleCmd)) {
-			command = possibleCmd;
-			args = parts.slice(1);
-			text = args.join(" ");
-			isCommand = true;
-		}
-	} else if (isCommand) {
-		const contentWithoutPrefix = body.slice(prefix.length).trim();
-		const parts = contentWithoutPrefix.split(/\s+/);
-		command = (parts.shift() || "").toLowerCase();
-		args = parts;
-		text = args.join(" ");
-	}
+        if (!prefix && isOwner && sortedPrefixes.length && allCmd.length) {
+                const parts = body.trim().split(/\s+/);
+                const possibleCmd = (parts[0] || "").toLowerCase();
+                if (allCmd.includes(possibleCmd)) {
+                        command = possibleCmd;
+                        args = parts.slice(1);
+                        text = args.join(" ");
+                        isCommand = true;
+                }
+        } else if (prefix) {
+                const contentWithoutPrefix = body.slice(prefix.length).trim();
+                const parts = contentWithoutPrefix.split(/\s+/);
+                const possibleCmd = (parts.shift() || "").toLowerCase();
+                
+                if (allCmd.includes(possibleCmd)) {
+                        command = possibleCmd;
+                        args = parts;
+                        text = args.join(" ");
+                        isCommand = true;
+                }
+        }
 
-	return { prefix, isCommand, command, args, text };
+        return { prefix, isCommand, command, args, text };
 }
