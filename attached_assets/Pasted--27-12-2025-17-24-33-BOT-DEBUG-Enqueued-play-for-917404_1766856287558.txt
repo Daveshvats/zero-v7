@@ -1,0 +1,41 @@
+[27/12/2025, 17.24.33] [BOT DEBUG] 📥 Enqueued: .play for 917404854406@s.whatsapp.net (Queue: 1)
+[27/12/2025, 17.24.33] [BOT INFO] ⚡ Executing: play by Davesh Vats [917404854406@s.whatsapp.net]
+cookies.txt not found. Proceeding without cookies.
+[yt-dlp cmd] yt-dlp "--js-runtimes" "deno" "--remote-components" "ejs:npm" "-f" "bestaudio[ext=m4a]" "-o" "/tmp/yt_1766856274222.m4a" "https://youtube.com/watch?v=iNxCLMKGZ0o"
+[27/12/2025, 17.24.34] [BOT ERROR] ⚠ Plugin sticker failed:
+Error: ffmpeg exited with code 234: frame=    0 fps=0.0 q=0.0 Lsize=       0KiB time=N/A bitrate=N/A speed=N/A    
+Conversion failed!
+
+Stack: Error: ffmpeg exited with code 234: frame=    0 fps=0.0 q=0.0 Lsize=       0KiB time=N/A bitrate=N/A speed=N/A    
+Conversion failed!
+
+    at ChildProcess.<anonymous> (/home/runner/workspace/node_modules/fluent-ffmpeg/lib/processor.js:180:22)
+    at ChildProcess.emit (node:events:524:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+    at Process.callbackTrampoline (node:internal/async_hooks:130:17)
+----- Incoming Message -----
+[General chat - zero] From: . (5213314539029)
+[ID]: 3A5F62159E6AE4658A80
+[Type]: reactionMessage
+[Body]: 😂
+----------------------------
+[27/12/2025, 17.24.38] [BOT ERROR] ⚠ Plugin play failed:
+Error: Command failed: yt-dlp "--js-runtimes" "deno" "--remote-components" "ejs:npm" "-f" "bestaudio[ext=m4a]" "-o" "/tmp/yt_1766856274222.m4a" "https://youtube.com/watch?v=iNxCLMKGZ0o"
+
+Usage: yt-dlp [OPTIONS] URL [URL...]
+
+yt-dlp: error: no such option: --js-runtimes
+
+Stack: Error: Command failed: yt-dlp "--js-runtimes" "deno" "--remote-components" "ejs:npm" "-f" "bestaudio[ext=m4a]" "-o" "/tmp/yt_1766856274222.m4a" "https://youtube.com/watch?v=iNxCLMKGZ0o"
+
+Usage: yt-dlp [OPTIONS] URL [URL...]
+
+yt-dlp: error: no such option: --js-runtimes
+
+    at genericNodeError (node:internal/errors:984:15)
+    at wrappedFn (node:internal/errors:538:14)
+    at ChildProcess.exithandler (node:child_process:422:12)
+    at ChildProcess.emit (node:events:524:28)
+    at maybeClose (node:internal/child_process:1104:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:304:5)
+    at Process.callbackTrampoline (node:internal/async_hooks:130:17)
