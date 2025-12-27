@@ -38,11 +38,11 @@ export default {
                         return;
                 }
 
-                const group = await GroupModel.getGroup(m.from);
-                await GroupModel.setGroup(m.from, { subject: groupMetadata.subject });
+                const group = await GroupModel.getGroup(m.chat);
+                await GroupModel.setGroup(m.chat, { subject: groupMetadata.subject });
 
                 const newBanned = !group?.banned;
-                await GroupModel.setBanned(m.from, newBanned);
+                await GroupModel.setBanned(m.chat, newBanned);
 
                 await m.reply(
                         `Banchat is now ${newBanned ? "enabled" : "disabled"} for ${groupMetadata.subject}`
