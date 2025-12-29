@@ -1,4 +1,5 @@
 import { GroupModel, UserModel } from "#lib/database/index";
+import { resolveLidToJid } from "#lib/serialize";
 
 export default {
         name: "unban",
@@ -19,8 +20,12 @@ export default {
 
         execute: async (m, { groupMetadata }) => {
                 if (m?.quoted?.sender || m.mentions[0]) {
-                        // Use the JID directly from quoted sender or mentions (preserves @lid/@s.whatsapp.net suffix)
-                        const _user = m?.quoted?.sender || m.mentions[0];
+                        // Get the raw JID from quoted sender or mentions
+                        const rawJid = m?.quoted?.sender || m.mentions[0];
+                        
+                        // Resolve LID to regular JID using group participants (so it matches m.sender format)
+                        const participants = groupMetadata?.participants || [];
+                        const _user = resolveLidToJid(rawJid, participants);
 
                         const targetName = m?.quoted?.pushName || _user.split("@")[0];
                         await UserModel.setUser(_user, { name: targetName });
