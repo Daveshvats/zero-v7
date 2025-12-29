@@ -1,9 +1,9 @@
 import fetch from "node-fetch";
 
 export default {
-        name: "textimg",
+        name: "qrcode",
         description: "Convert text to an image",
-        command: ["textimg", "txt2img", "textpic"],
+        command: ["qr", "qrcode", "qr-code"],
         permissions: "all",
         hidden: false,
         failed: "Failed to %command: %error",
@@ -34,7 +34,9 @@ export default {
                 try {
                         // Limit text length to prevent API errors
                         if (text.length > 100) {
-                                return m.reply("❌ Text is too long! Maximum 100 characters allowed.");
+                                return m.reply(
+                                        "❌ Text is too long! Maximum 100 characters allowed."
+                                );
                         }
 
                         const apiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(text)}`;

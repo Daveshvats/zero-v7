@@ -18,21 +18,19 @@ export default {
         private: false,
 
         execute: async (m, { groupMetadata }) => {
-                if (m?.quoted?.sender || m.mentions[0] || m.text) {
-                        const _user =
-                                (m?.quoted?.sender || m.mentions[0] || m.text).replace(
-                                        /[^0-9]/g,
-                                        ""
-                                ) + "@s.whatsapp.net";
+                if (m?.quoted?.sender || m.mentions[0]) {
+                        // Use the JID directly from quoted sender or mentions (preserves @lid/@s.whatsapp.net suffix)
+                        const _user = m?.quoted?.sender || m.mentions[0];
 
                         const user = await UserModel.getUser(_user);
-                        await UserModel.setUser(_user, { name: m.pushName });
+                        const targetName = m?.quoted?.pushName || _user.split("@")[0];
+                        await UserModel.setUser(_user, { name: targetName });
 
                         const newBanned = !user?.banned;
                         await UserModel.setBanned(_user, newBanned);
 
                         await m.reply(
-                                `${newBanned ? "Banned" : "Unbanned"} @${_user.replace(/[^0-9]/g, "")}`
+                                `${newBanned ? "Banned" : "Unbanned"} @${_user.split("@")[0]}`
                         );
 
                         return;
