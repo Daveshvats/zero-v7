@@ -9,6 +9,8 @@ export const users = pgTable("users", {
         premium: boolean("premium").default(false),
         premiumExpired: timestamp("premium_expired"),
         limit: integer("limit").default(0),
+        termsAccepted: boolean("terms_accepted").default(false),
+        termsAcceptedAt: timestamp("terms_accepted_at"),
         createdAt: timestamp("created_at").defaultNow(),
         updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -24,6 +26,14 @@ export const groups = pgTable("groups", {
         goodbyeMessage: text("goodbye_message"),
         antilink: boolean("antilink").default(false),
         muted: boolean("muted").default(false),
+        // Character AI auto-responder per group
+        caiEnabled: boolean("cai_enabled").default(false),
+        caiCharId: text("cai_char_id"),
+        caiCharName: text("cai_char_name"),
+        caiChatId: text("cai_chat_id"),   // persisted CAI chat_id for conversation continuity
+        // Group-level terms acceptance (persisted so cache survives restarts)
+        termsAccepted: boolean("terms_accepted").default(false),
+        termsAcceptedAt: timestamp("terms_accepted_at"),
         metadata: jsonb("metadata"),
         createdAt: timestamp("created_at").defaultNow(),
         updatedAt: timestamp("updated_at").defaultNow(),
@@ -39,7 +49,11 @@ export const commands = pgTable("commands", {
         success: boolean("success").default(true),
         error: text("error"),
         executedAt: timestamp("executed_at").defaultNow(),
-});
+}, (table) => [
+        index("cmd_user_jid_idx").on(table.userJid),
+        index("cmd_command_name_idx").on(table.commandName),
+        index("cmd_executed_at_idx").on(table.executedAt),
+]);
 
 export const aiTasks = pgTable("ai_tasks", {
         id: serial("id").primaryKey(),
@@ -52,7 +66,10 @@ export const aiTasks = pgTable("ai_tasks", {
         metadata: jsonb("metadata"),
         createdAt: timestamp("created_at").defaultNow(),
         completedAt: timestamp("completed_at"),
-});
+}, (table) => [
+        index("ai_task_user_jid_idx").on(table.userJid),
+        index("ai_task_status_idx").on(table.status),
+]);
 
 export const settings = pgTable("settings", {
         id: serial("id").primaryKey(),
@@ -115,6 +132,18 @@ export const deadLetterQueue = pgTable("dead_letter_queue", {
         index("dlq_failed_at_idx").on(table.failedAt),
 ]);
 
+export const voiceClones = pgTable("voice_clones", {
+        id: serial("id").primaryKey(),
+        groupJid: text("group_jid").notNull(),
+        name: text("name").notNull(),
+        voiceId: text("voice_id").notNull(),
+        clonedBy: text("cloned_by").notNull(),
+        createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+        index("vc_group_name_idx").on(table.groupJid, table.name),
+        index("vc_group_idx").on(table.groupJid),
+]);
+
 export const permissions = pgTable("permissions", {
         id: serial("id").primaryKey(),
         jid: text("jid").notNull(),
@@ -127,6 +156,6 @@ export const permissions = pgTable("permissions", {
         createdAt: timestamp("created_at").defaultNow(),
         updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
-        index("perm_jid_idx").on(table.jid),
+        index("perm_lookup_idx").on(table.jid, table.type, table.permission),
         index("perm_command_idx").on(table.commandName),
 ]);

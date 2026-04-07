@@ -1,4 +1,5 @@
-import axios from "axios";
+import { submitPollAndSend } from "#lib/ai-helper";
+import itsrose from "#lib/itsrose";
 
 // Hardcoded Hair Style IDs for instant help
 const HAIR_STYLES = [
@@ -20,7 +21,6 @@ export default {
     cooldown: 5,
 
     async execute(m, { api }) {
-        const apiKey = "sk_PNcLyV1b7EU6lGCMrOMPJBRyHPcHcojdHc-INT1qsrw";
         const args = m.text ? m.text.trim().split(/\s+/) : [];
         const input = args[0] ? args[0].toLowerCase() : null;
 
@@ -56,56 +56,22 @@ export default {
             if (!buffer) return m.reply("❌ Failed to download image. Try again.");
 
             // --- 4. SUBMIT TO API ---
-            const submit = await axios.post("https://api.itsrose.net/image/hair_change", {
+            const submit = await itsrose.post("/image/hair_change", {
                 hair_id: input,
                 init_image: buffer.toString("base64"),
                 sync: true 
-            }, {
-                headers: { 
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${apiKey}` 
-                }
             }).catch(e => e.response);
 
-            if (!submit?.data?.status) {
+            if (!submit?.data?.ok) {
                 return m.reply(`❌ API Error: ${submit?.data?.message || "Server error"}`);
             }
 
-            const res = submit.data.result;
+            const res = submit.data.data;
 
-            // --- 5. HANDLE IMMEDIATE RESULT (Sync: true) ---
-            if (res.images && res.images.length > 0) {
-                for (const url of res.images) {
-                    await m.reply({ image: { url }, caption: `✅ Hairstyle: ${input}` });
-                }
-                return;
-            }
-
-            // --- 6. POLLING FALLBACK (if status is 'processing') ---
-            if (res.task_id) {
-                const taskId = res.task_id;
-                let attempts = 0;
-                while (attempts < 35) {
-                    await new Promise(r => setTimeout(r, 4000));
-                    
-                    const check = await axios.get("https://api.itsrose.net/image/get_task", {
-                        params: { task_id: taskId },
-                        headers: { Authorization: `Bearer ${apiKey}` }
-                    });
-
-                    if (check.data?.status && check.data?.result) {
-                        const statusRes = check.data.result;
-                        if (statusRes.status === "completed") {
-                            for (const url of statusRes.images) {
-                                await m.reply({ image: { url }, caption: `✅ Hairstyle: ${input}` });
-                            }
-                            return;
-                        }
-                        if (statusRes.status === "failed") return m.reply("❌ Hair processing failed.");
-                    }
-                    attempts++;
-                }
-            }
+            return submitPollAndSend(m, res, `✅ Hairstyle: ${input}`, {
+                pollPath: '/image/get_task',
+                label: 'Hair Change',
+            });
 
         } catch (e) {
             console.error("HAIR CHANGE ERROR:", e);

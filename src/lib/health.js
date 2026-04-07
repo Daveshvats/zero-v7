@@ -79,14 +79,16 @@ class HealthMonitor extends EventEmitter {
         }
 
         async checkAll() {
-                const results = {};
-
-                for (const [name] of this.components) {
-                        results[name] = await this.checkComponent(name);
-                }
+                const entries = Array.from(this.components.entries());
+                const results = await Promise.all(
+                        entries.map(async ([name]) => {
+                                const result = await this.checkComponent(name);
+                                return [name, result];
+                        })
+                );
 
                 this.lastCheck = new Date().toISOString();
-                return results;
+                return Object.fromEntries(results);
         }
 
         getOverallStatus() {
@@ -174,23 +176,37 @@ healthMonitor.registerComponent("memory", async () => {
         const usage = process.memoryUsage();
         const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
         const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
-        const usagePercent = (usage.heapUsed / usage.heapTotal) * 100;
+        const rssMB = Math.round(usage.rss / 1024 / 1024);
+        const arrayBuffersMB = Math.round((usage.arrayBuffers || 0) / 1024 / 1024);
 
-        // Aggressive memory cleanup at 70% to prevent degradation
-        if (usagePercent > 70 && global.gc) {
-                try {
-                        global.gc();
-                } catch (e) {
-                        // gc flag may not be enabled
+        // Aggressive memory cleanup at high heap usage
+        if (global.gc) {
+                const heapPercent = (usage.heapUsed / usage.heapTotal) * 100;
+                if (heapPercent > 80) {
+                        try {
+                                global.gc();
+                        } catch (e) {
+                                // gc flag may not be enabled
+                        }
                 }
         }
 
+        // Node.js auto-grows heapTotal to match heapUsed, so heapUsed/heapTotal
+        // is always high (~90%) and useless as a health metric.
+        // Use RSS threshold instead: degraded above 256MB, unhealthy above 512MB.
+        const MEMORY_DEGRADED_MB = 256;
+        const MEMORY_UNHEALTHY_MB = 512;
+        const healthy = rssMB < MEMORY_DEGRADED_MB;
+
         return {
-                healthy: usagePercent < 85,
+                healthy,
+                ...(rssMB >= MEMORY_DEGRADED_MB && { degraded: true }),
+                ...(rssMB >= MEMORY_UNHEALTHY_MB && { unhealthy: true }),
                 details: {
                         heapUsedMB,
                         heapTotalMB,
-                        usagePercent: Math.round(usagePercent),
+                        rssMB,
+                        arrayBuffersMB,
                 },
         };
 });

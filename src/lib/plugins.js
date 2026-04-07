@@ -1,8 +1,6 @@
 import { BOT_CONFIG } from "#config/index";
-import * as db from "#lib/database/index";
 import { setAllCommands } from "#lib/prefix";
 import print from "#lib/print";
-import Store from "#lib/store";
 import { APIRequest as api } from "#utils/API/request";
 import NodeCache from "@cacheable/node-cache";
 import { readdirSync, watch } from "fs";
@@ -12,23 +10,57 @@ import { fileURLToPath, pathToFileURL } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+/** Interval to clean up stale user queues (5 minutes) */
+const QUEUE_CLEANUP_INTERVAL = 300_000;
+
+/** Max age for a user queue entry before cleanup (10 minutes of inactivity) */
+const QUEUE_MAX_AGE = 600_000;
+
+/** Pre-loaded DB module reference (eliminates dynamic import() on every command) */
+let _dbModule = null;
+async function getDB() {
+        if (!_dbModule) {
+                _dbModule = await import("#lib/database/index");
+        }
+        return _dbModule;
+}
+
+/** Max time a single command can run before being timed out (60 seconds) */
+const COMMAND_TIMEOUT_MS = 60_000;
+
 class PluginManager {
-        constructor(botConfig) {
+        constructor(botConfig, store) {
                 this.plugins = [];
                 this.sessionName = BOT_CONFIG.sessionName;
                 this.cooldowns = new NodeCache({ stdTTL: 60 * 60 });
                 this.usageLimits = new NodeCache({ stdTTL: 86400 });
                 this.botConfig = botConfig;
                 this.commandQueues = new Map();
+                this.queueTimestamps = new Map(); // Track last activity per user for cleanup
                 this.processingStatus = new Map();
                 this.debounceTimeout = null;
-                this.store = new Store(this.sessionName);
+                // Reuse the store instance from Connect instead of creating a duplicate
+                this.store = store || null;
                 this.MAX_QUEUE_PER_USER = 5;
                 this.periodicTasks = [];
+
+                // O(1) command → plugin lookup map (populated after plugin load)
+                this.commandMap = new Map();
+
+                // Permission cache to reduce DB hits
+                this.permCache = new NodeCache({ stdTTL: 60, checkperiod: 30 });
+
+                // Pre-load DB module at construction time (warm cache before any commands arrive)
+                getDB().catch(() => {});
+
+                // Start queue cleanup timer
+                this._cleanupTimer = setInterval(() => this._cleanupStaleQueues(), QUEUE_CLEANUP_INTERVAL);
+                if (this._cleanupTimer.unref) this._cleanupTimer.unref();
         }
 
         async loadPlugins() {
                 this.plugins = [];
+                this.commandMap.clear();
                 const pluginsDir = join(__dirname, "../plugins");
 
                 try {
@@ -84,6 +116,9 @@ class PluginManager {
 
                         await Promise.all(pluginLoadPromises);
 
+                        // Build O(1) command lookup map
+                        this._buildCommandMap();
+
                         await this.applyPeriodicSettingsFromDB();
 
                         setAllCommands(this.getAllCommands());
@@ -94,15 +129,35 @@ class PluginManager {
                 }
         }
 
+        /**
+         * Build a Map for O(1) command → plugin lookup.
+         */
+        _buildCommandMap() {
+                this.commandMap.clear();
+                for (const plugin of this.plugins) {
+                        for (const cmd of plugin.command) {
+                                this.commandMap.set(cmd.toLowerCase(), plugin);
+                        }
+                }
+        }
+
+        /**
+         * Get plugin by command name in O(1) time.
+         * @param {string} command - Lowercase command name.
+         * @returns {object|undefined}
+         */
+        getPluginByCommand(command) {
+                return this.commandMap.get(command);
+        }
+
         getAllCommands() {
-                return this.plugins.flatMap((plugin) =>
-                        plugin.command.map((cmd) => cmd.toLowerCase())
-                );
+                return Array.from(this.commandMap.keys());
         }
 
         async applyPeriodicSettingsFromDB() {
                 try {
-                        const settings = await db.SettingsModel.getSettings();
+                        const { SettingsModel } = await getDB();
+                        const settings = await SettingsModel.getSettings();
                         for (const plugin of this.plugins) {
                                 if (plugin.periodic && typeof plugin.name === "string") {
                                         const key = plugin.name.toLowerCase();
@@ -208,10 +263,11 @@ class PluginManager {
                         experimental: false,
                 };
 
-                Object.keys(defaults).forEach((key) => {
-                        plugin[key] =
-                                plugin[key] !== undefined ? plugin[key] : defaults[key];
-                });
+                for (const key of Object.keys(defaults)) {
+                        if (plugin[key] === undefined) {
+                                plugin[key] = defaults[key];
+                        }
+                }
         }
 
         async enqueueCommand(sock, m) {
@@ -220,6 +276,8 @@ class PluginManager {
                 if (!this.commandQueues.has(senderJid)) {
                         this.commandQueues.set(senderJid, []);
                 }
+
+                this.queueTimestamps.set(senderJid, Date.now());
 
                 const queue = this.commandQueues.get(senderJid);
 
@@ -262,8 +320,14 @@ class PluginManager {
 
                 const { sock, m } = queue.shift();
                 const command = m.command.toLowerCase();
-                const plugin = this.plugins.find((p) =>
-                        p.command.some((cmd) => cmd.toLowerCase() === command)
+
+                // O(1) lookup instead of linear .find()
+                const plugin = this.getPluginByCommand(command);
+
+                // Timeout wrapper: prevent stuck commands from blocking the entire queue
+                let _timeoutId;
+                const timeoutPromise = new Promise((_, reject) =>
+                        (_timeoutId = setTimeout(() => reject(new Error(`Command ${command} timed out after ${COMMAND_TIMEOUT_MS / 1000}s`)), COMMAND_TIMEOUT_MS))
                 );
 
                 try {
@@ -279,22 +343,41 @@ class PluginManager {
                                 this.checkDailyLimit(plugin, m, sock),
                         ];
 
-                        const results = await Promise.all(checks);
+                        const results = await Promise.race([Promise.all(checks), timeoutPromise]);
                         if (results.some((result) => result)) {
                                 return this.continueQueue(senderJid);
                         }
 
                         await this.sendPreExecutionActions(plugin, m, sock);
-                        await this.executePlugin(plugin, sock, m);
+                        await Promise.race([this.executePlugin(plugin, sock, m), timeoutPromise]);
                 } catch (error) {
-                        print.error(`🔥 Processing error for ${senderJid}:`, error);
+                        if (error.message?.includes("timed out")) {
+                                print.warn(`⏰ Command ${command} timed out for ${senderJid}, skipping to next in queue`);
+                        } else {
+                                print.error(`🔥 Processing error for ${senderJid}:`, error);
+                        }
                 } finally {
+                        clearTimeout(_timeoutId);
                         this.continueQueue(senderJid);
                 }
         }
 
         continueQueue(senderJid) {
                 setImmediate(() => this.processQueue(senderJid));
+        }
+
+        /**
+         * Clean up stale user command queues to prevent memory leaks.
+         */
+        _cleanupStaleQueues() {
+                const now = Date.now();
+                for (const [jid, timestamp] of this.queueTimestamps) {
+                        if (now - timestamp > QUEUE_MAX_AGE) {
+                                this.commandQueues.delete(jid);
+                                this.queueTimestamps.delete(jid);
+                                this.processingStatus.delete(jid);
+                        }
+                }
         }
 
         async checkCooldown(plugin, m) {
@@ -349,86 +432,122 @@ class PluginManager {
                         (m.sock && m.sock.isClonebot) ||
                         (typeof sock !== "undefined" && sock.isClonebot);
 
-                let isGroupAdmin = false;
-                if (m.isGroup) {
-                        try {
-                                let metadata = m.metadata;
-                                
-                                // If metadata missing, fetch it
-                                if (!metadata?.participants || metadata.participants.length === 0) {
-                                        try {
-                                                metadata = await sock.groupMetadata(m.from);
-                                                if (metadata) {
-                                                        m.metadata = metadata;
-                                                }
-                                        } catch (fetchErr) {
-                                                print.debug(`Failed to fetch group metadata: ${fetchErr.message}`);
-                                        }
-                                }
-                                
-                                // Normalize sender JID for comparison
-                                const normalizedSender = m.sender.includes("@") 
-                                        ? m.sender 
-                                        : m.sender + "@s.whatsapp.net";
-                                
-                                if (metadata?.participants) {
-                                        // Find participant with normalized JID matching
-                                        const participant = metadata.participants.find((p) => {
-                                                const normalizedId = p.id.includes("@") 
-                                                        ? p.id 
-                                                        : p.id + "@s.whatsapp.net";
-                                                return normalizedId === normalizedSender || p.id === m.sender;
-                                        });
-                                        
-                                        isGroupAdmin =
-                                                participant?.admin === "admin" ||
-                                                participant?.admin === "superadmin";
-                                }
-                        } catch (adminCheckErr) {
-                                print.debug(`Admin check error: ${adminCheckErr.message}`);
-                                isGroupAdmin = false;
-                        }
-                }
+                // Use isAdmin/isBotAdmin from serialize.js — they already handle @lid resolution
+                // via phone-number extraction comparison against groupMetadata.participants
+                const isGroupAdmin = m.isAdmin;
 
+                // Use cached permission checks to reduce DB load
                 try {
-                        // Check if user is banned
-                        const user = await db.UserModel.getUser(m.sender);
-                        if (user?.banned && !isOwner) {
-                                await m.reply("🚫 You are banned from using the bot");
-                                if (plugin.react) await m.react("❌");
-                                return true;
-                        }
+                        const { UserModel, GroupModel, PermissionModel } = await getDB();
 
-                        // Check if group is banned
-                        if (m.isGroup && !isOwner) {
-                                const group = await db.GroupModel.getGroup(m.from);
-                                if (group?.banned) {
+                        // Build list of cache-cold DB queries and run them ALL in parallel
+                        const banCacheKey = `ban:${m.sender}`;
+                        const cachedBan = this.permCache.get(banCacheKey);
+                        const groupBanCacheKey = `gban:${m.from}`;
+                        const cachedGroupBan = m.isGroup && !isOwner ? this.permCache.get(groupBanCacheKey) : true;
+                        const blockCacheKey = `block:${m.sender}:${plugin.name}`;
+                        const cachedBlock = this.permCache.get(blockCacheKey);
+                        const groupDisableKey = `gdisable:${m.from}:${plugin.name}`;
+                        const cachedGroupDisable = m.isGroup ? this.permCache.get(groupDisableKey) : true;
+                        const premCacheKey = `premium:${m.sender}`;
+                        const cachedPrem = plugin.premium && !isOwner ? this.permCache.get(premCacheKey) : true;
+
+                        const needBan = cachedBan === undefined;
+                        const needGroupBan = m.isGroup && !isOwner && cachedGroupBan === undefined;
+                        const needBlock = cachedBlock === undefined;
+                        const needGroupDisable = m.isGroup && cachedGroupDisable === undefined;
+                        const needPremium = plugin.premium && !isOwner && cachedPrem === undefined;
+
+                        if (needBan || needGroupBan || needBlock || needGroupDisable || needPremium) {
+                                // Fire ALL cache-cold queries in parallel — one round-trip instead of 5
+                                const [userDoc, groupDoc, isBlocked, isGroupDisabled] = await Promise.all([
+                                        (needBan || needPremium)
+                                                ? UserModel.getUser(m.sender).catch(() => null)
+                                                : Promise.resolve(m._userDoc || null),
+                                        needGroupBan
+                                                ? GroupModel.getGroup(m.from).catch(() => null)
+                                                : Promise.resolve(null),
+                                        needBlock
+                                                ? PermissionModel.isUserBlocked(m.sender, plugin.name).catch(() => false)
+                                                : Promise.resolve(false),
+                                        needGroupDisable
+                                                ? PermissionModel.isGroupDisabled(m.from, plugin.name).catch(() => false)
+                                                : Promise.resolve(false),
+                                ]);
+
+                                // Cache user doc for downstream use
+                                if (userDoc) m._userDoc = userDoc;
+
+                                // Populate caches from results
+                                if (needBan) {
+                                        this.permCache.set(banCacheKey, !!userDoc?.banned, 120);
+                                }
+                                if (needGroupBan) {
+                                        this.permCache.set(groupBanCacheKey, !!groupDoc?.banned, 120);
+                                }
+                                if (needBlock) {
+                                        this.permCache.set(blockCacheKey, isBlocked, 60);
+                                }
+                                if (needGroupDisable) {
+                                        this.permCache.set(groupDisableKey, isGroupDisabled, 60);
+                                }
+                                if (needPremium) {
+                                        this.permCache.set(premCacheKey, !!userDoc?.premium, 120);
+                                }
+
+                                // Check ban
+                                if (cachedBan === undefined && !!userDoc?.banned && !isOwner) {
+                                        await m.reply("🚫 You are banned from using the bot");
+                                        if (plugin.react) await m.react("❌");
+                                        return true;
+                                }
+                                // Check group ban
+                                if (needGroupBan && !!groupDoc?.banned) {
                                         await m.reply("🚫 This group is banned from using the bot");
                                         if (plugin.react) await m.react("❌");
                                         return true;
                                 }
-                        }
-
-                        const isBlocked = await db.PermissionModel.isUserBlocked(m.sender, plugin.name);
-                        if (isBlocked) {
-                                await m.reply("🚫 You are blocked from using this command");
-                                if (plugin.react) await m.react("❌");
-                                return true;
-                        }
-
-                        if (m.isGroup) {
-                                const groupDisabled = await db.PermissionModel.isGroupDisabled(m.from, plugin.name);
-                                if (groupDisabled) {
+                                // Check user command block
+                                if (needBlock && isBlocked) {
+                                        await m.reply("🚫 You are blocked from using this command");
+                                        if (plugin.react) await m.react("❌");
+                                        return true;
+                                }
+                                // Check group command disabled
+                                if (needGroupDisable && isGroupDisabled) {
                                         await m.reply("🚫 This command is disabled in this group");
                                         if (plugin.react) await m.react("❌");
                                         return true;
                                 }
-                        }
-
-                        if (plugin.premium && !isOwner) {
-                                const isPremium = await db.PermissionModel.isPremium(m.sender);
-                                const userPremium = await db.UserModel.getUser(m.sender);
-                                if (!isPremium && !userPremium?.premium) {
+                                // Check premium
+                                if (needPremium && !userDoc?.premium) {
+                                        await m.reply("⭐ Premium-only command");
+                                        if (plugin.react) await m.react("❌");
+                                        return true;
+                                }
+                        } else {
+                                // All caches warm — just check cached values (no DB needed)
+                                if (cachedBan && !isOwner) {
+                                        await m.reply("🚫 You are banned from using the bot");
+                                        if (plugin.react) await m.react("❌");
+                                        return true;
+                                }
+                                if (m.isGroup && !isOwner && cachedGroupBan) {
+                                        await m.reply("🚫 This group is banned from using the bot");
+                                        if (plugin.react) await m.react("❌");
+                                        return true;
+                                }
+                                if (cachedBlock) {
+                                        await m.reply("🚫 You are blocked from using this command");
+                                        if (plugin.react) await m.react("❌");
+                                        return true;
+                                }
+                                if (m.isGroup && cachedGroupDisable) {
+                                        await m.reply("🚫 This command is disabled in this group");
+                                        if (plugin.react) await m.react("❌");
+                                        return true;
+                                }
+                                if (plugin.premium && !isOwner && !cachedPrem) {
                                         await m.reply("⭐ Premium-only command");
                                         if (plugin.react) await m.react("❌");
                                         return true;
@@ -549,21 +668,10 @@ class PluginManager {
                 const groupMetadata = m.metadata || {};
                 const participants = groupMetadata.participants || [];
 
-                const isAdmin =
-                        m.isGroup &&
-                        participants.some(
-                                (p) =>
-                                        p.id === m.sender &&
-                                        (p.admin === "admin" || p.admin === "superadmin")
-                        );
-
-                const isBotAdmin =
-                        m.isGroup &&
-                        participants.some(
-                                (p) =>
-                                        p.id === sock.user.id &&
-                                        (p.admin === "admin" || p.admin === "superadmin")
-                        );
+                // Use isAdmin/isBotAdmin from serialize.js — they already handle @lid resolution
+                // via phone-number extraction comparison against groupMetadata.participants
+                const isAdmin = m.isAdmin;
+                const isBotAdmin = m.isBotAdmin;
 
                 const params = {
                         sock,
@@ -578,7 +686,7 @@ class PluginManager {
                         isAdmin,
                         isBotAdmin,
                         api,
-                        db,
+                        db: await getDB(),
                         store: this.store,
                         pluginManager: this,
                 };
@@ -591,7 +699,7 @@ class PluginManager {
                         if (plugin.execute.length === 1) {
                                 await plugin.execute(m);
                         } else {
-                                const { m, ...rest } = params;
+                                const { m: _m, ...rest } = params;
                                 await plugin.execute(m, rest);
                         }
 
@@ -624,7 +732,8 @@ class PluginManager {
                         }
 
                         try {
-                                await db.DeadLetterModel.addFailed(
+                                const { DeadLetterModel } = await getDB();
+                                await DeadLetterModel.addFailed(
                                         plugin.name,
                                         m.sender,
                                         m.isGroup ? m.from : null,
@@ -662,6 +771,7 @@ class PluginManager {
         }
 
         async runPeriodicMessagePlugins(m, sock) {
+                const promises = [];
                 for (const plugin of this.plugins) {
                         const periodic = plugin.periodic;
                         if (
@@ -669,12 +779,15 @@ class PluginManager {
                                 (periodic.type === "message" || !periodic.type) &&
                                 typeof periodic.run === "function"
                         ) {
-                                try {
-                                        await periodic.run(m, { sock, pluginManager: this });
-                                } catch (err) {
-                                        print.error(`[Periodic ${plugin.name}] Error:`, err);
-                                }
+                                promises.push(
+                                        periodic.run(m, { sock, pluginManager: this }).catch((err) => {
+                                                print.error(`[Periodic ${plugin.name}] Error:`, err);
+                                        })
+                                );
                         }
+                }
+                if (promises.length > 0) {
+                        await Promise.allSettled(promises);
                 }
         }
 
@@ -776,7 +889,7 @@ class PluginManager {
                 print.debug("🛑 All periodic interval tasks stopped.");
         }
 
-        async handleAfterPlugins(m, sock) {
+        handleAfterPlugins(m, sock) {
                 const params = {
                         sock,
                         text: m.text,
@@ -790,21 +903,36 @@ class PluginManager {
                         isBotAdmin: m.isBotAdmin,
                         api,
                 };
+                // Fire-and-forget: don't block the message loop for after() hooks
                 for (const plugin of this.plugins) {
                         if (typeof plugin.after === "function") {
-                                try {
-                                        if (plugin.after.length === 1) {
-                                                await plugin.after(m);
-                                        } else {
-                                                await plugin.after(m, params);
-                                        }
-                                } catch (err) {
-                                        console.error(
-                                                `Error in after() of plugin "${plugin.name}":`,
-                                                err
-                                        );
+                                if (plugin.after.length === 1) {
+                                        plugin.after(m).catch((err) => {
+                                                console.error(
+                                                        `Error in after() of plugin "${plugin.name}":`,
+                                                        err
+                                                );
+                                        });
+                                } else {
+                                        plugin.after(m, params).catch((err) => {
+                                                console.error(
+                                                        `Error in after() of plugin "${plugin.name}":`,
+                                                        err
+                                                );
+                                        });
                                 }
                         }
+                }
+        }
+
+        /**
+         * Invalidate permission cache entries for a user, group, or command.
+         * Call this when bans/permissions change.
+         */
+        invalidatePermCache(pattern) {
+                const keys = this.permCache.keys().filter((k) => k.startsWith(pattern));
+                for (const key of keys) {
+                        this.permCache.del(key);
                 }
         }
 }

@@ -86,6 +86,26 @@ class GracefulShutdown {
                 }
 
                 process.on("uncaughtException", (error) => {
+                        // Recoverable PostgreSQL errors from cloud providers (Neon, Supabase, Railway).
+                        // These happen when idle connections are killed server-side after their timeout.
+                        // The pg Pool automatically creates fresh connections on the next query,
+                        // so these errors are safe to swallow — no shutdown needed.
+                        const msg = error?.message || "";
+                        if (
+                                msg.includes("terminating connection due to administrator command") ||
+                                msg.includes("connection terminated unexpectedly") ||
+                                msg.includes("the connection was terminated") ||
+                                msg.includes("Connection terminated unexpectedly") ||
+                                msg.includes("SSL connection has been closed") ||
+                                msg.includes("ECONNRESET") ||
+                                msg.includes("EPIPE") ||
+                                msg.includes("read ECONNRESET") ||
+                                msg.includes("timeout exceeded when trying to connect")
+                        ) {
+                                print.debug(`PostgreSQL connection recovered (safe to ignore): ${msg}`);
+                                return;
+                        }
+
                         print.error("Uncaught exception:", error);
                         metricsCollector.recordError("uncaughtException", error);
                         this.shutdown("UNCAUGHT_EXCEPTION");

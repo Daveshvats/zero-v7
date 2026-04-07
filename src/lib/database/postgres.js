@@ -8,14 +8,146 @@ const { Pool } = pg;
 
 let pool = null;
 let db = null;
+let keepAliveTimer = null;
 
 const POOL_CONFIG = {
         min: 2,
         max: 10,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 10000,
+        idleTimeoutMillis: 300000,     // 5 min — prevents excessive connect/disconnect churn with Neon
+        connectionTimeoutMillis: 15000,
         allowExitOnIdle: false,
 };
+
+/**
+ * Auto-switch Neon direct URLs to use the pooled endpoint (-pooler).
+ * PgBouncer handles reconnection transparently, preventing dead connections.
+ * If you're NOT using Neon, this is a no-op.
+ */
+function ensurePoolerURL(connectionString) {
+        if (!connectionString) return connectionString;
+        try {
+                const url = new URL(connectionString);
+                if (url.hostname.includes("-pooler.")) {
+                        return connectionString;
+                }
+                if (url.hostname.includes(".neon.tech")) {
+                        url.hostname = url.hostname.replace(/(ep-[^.]+)\./, "$1-pooler.");
+                        print.info(`Detected Neon direct connection, auto-switching to pooled endpoint`);
+                        return url.toString();
+                }
+        } catch {}
+        return connectionString;
+}
+
+/**
+ * Run auto-migrations: add columns to existing tables if they don't exist.
+ * Uses raw SQL with IF NOT EXISTS so it's safe to run on every startup.
+ */
+async function runAutoMigrations(pool) {
+        const migrations = [
+                // === users table ===
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT`,
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT false`,
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS premium BOOLEAN DEFAULT false`,
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_expired TIMESTAMP`,
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS "limit" INTEGER DEFAULT 0`,
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted BOOLEAN DEFAULT false`,
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP`,
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`,
+                `ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`,
+
+                // === groups table ===
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS name TEXT`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT false`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS welcome BOOLEAN DEFAULT false`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS welcome_message TEXT`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS goodbye BOOLEAN DEFAULT false`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS goodbye_message TEXT`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS antilink BOOLEAN DEFAULT false`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS muted BOOLEAN DEFAULT false`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS cai_enabled BOOLEAN DEFAULT false`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS cai_char_id TEXT`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS cai_char_name TEXT`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS cai_chat_id TEXT`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS metadata JSONB`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS terms_accepted BOOLEAN DEFAULT false`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`,
+                `ALTER TABLE groups ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`,
+
+                // === voice_clones table ===
+                `CREATE TABLE IF NOT EXISTS voice_clones (
+                        id SERIAL PRIMARY KEY,
+                        group_jid TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        voice_id TEXT NOT NULL,
+                        cloned_by TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW()
+                )`,
+                `CREATE UNIQUE INDEX IF NOT EXISTS vc_group_name_unique ON voice_clones(group_jid, name)`,
+                // Fix any existing rows with uppercase names (case mismatch bug)
+                `UPDATE voice_clones SET name = LOWER(name) WHERE name != LOWER(name)`,
+
+                // === commands table ===
+                `ALTER TABLE commands ADD COLUMN IF NOT EXISTS command_name TEXT NOT NULL DEFAULT ''`,
+                `ALTER TABLE commands ADD COLUMN IF NOT EXISTS user_jid TEXT NOT NULL DEFAULT ''`,
+                `ALTER TABLE commands ADD COLUMN IF NOT EXISTS group_jid TEXT`,
+                `ALTER TABLE commands ADD COLUMN IF NOT EXISTS args TEXT`,
+                `ALTER TABLE commands ADD COLUMN IF NOT EXISTS response_time_ms INTEGER`,
+                `ALTER TABLE commands ADD COLUMN IF NOT EXISTS success BOOLEAN DEFAULT true`,
+                `ALTER TABLE commands ADD COLUMN IF NOT EXISTS error TEXT`,
+                `ALTER TABLE commands ADD COLUMN IF NOT EXISTS executed_at TIMESTAMP DEFAULT NOW()`,
+
+                // === ai_tasks table ===
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT ''`,
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS user_jid TEXT NOT NULL DEFAULT ''`,
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS prompt TEXT`,
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS result TEXT`,
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'`,
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS processing_time_ms INTEGER`,
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS metadata JSONB`,
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`,
+                `ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`,
+
+                // === sessions table ===
+                `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS phone TEXT`,
+                `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS connected BOOLEAN DEFAULT false`,
+                `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS is_clone BOOLEAN DEFAULT false`,
+                `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`,
+                `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_active TIMESTAMP DEFAULT NOW()`,
+
+                // === settings table ===
+                `ALTER TABLE settings ADD COLUMN IF NOT EXISTS value JSONB`,
+                `ALTER TABLE settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`,
+        ];
+
+        // === Index creation migrations ===
+        // Safe to run on every startup — PostgreSQL supports CREATE INDEX IF NOT EXISTS
+        const indexMigrations = [
+                `CREATE INDEX IF NOT EXISTS idx_commands_user_jid ON commands(user_jid)`,
+                `CREATE INDEX IF NOT EXISTS idx_commands_command_name ON commands(command_name)`,
+                `CREATE INDEX IF NOT EXISTS idx_commands_executed_at ON commands(executed_at)`,
+                `CREATE INDEX IF NOT EXISTS idx_ai_tasks_user_jid ON ai_tasks(user_jid)`,
+                `CREATE INDEX IF NOT EXISTS idx_ai_tasks_status ON ai_tasks(status)`,
+                `CREATE INDEX IF NOT EXISTS idx_permissions_lookup ON permissions(jid, type, permission)`,
+                `CREATE INDEX IF NOT EXISTS idx_voice_clones_group ON voice_clones(group_jid)`,
+                `CREATE INDEX IF NOT EXISTS idx_voice_clones_group_name ON voice_clones(group_jid, name)`,
+        ];
+
+        for (const sql of [...migrations, ...indexMigrations]) {
+                try {
+                        await pool.query(sql);
+                } catch (err) {
+                        // Ignore "column already exists" or table-not-found errors during first boot
+                        if (!err.message.includes("already exists") && !err.message.includes("does not exist")) {
+                                print.debug(`Auto-migration notice: ${err.message}`);
+                        }
+                }
+        }
+        print.debug("Auto-migrations complete");
+}
 
 export async function initPostgres() {
         if (!process.env.DATABASE_URL) {
@@ -24,22 +156,68 @@ export async function initPostgres() {
         }
 
         try {
+                // Normalize the DATABASE_URL to explicitly use sslmode=verify-full.
+                let connectionString = process.env.DATABASE_URL;
+                if (connectionString) {
+                        const url = new URL(connectionString);
+                        const sslMode = url.searchParams.get("sslmode");
+                        if (sslMode && sslMode !== "verify-full" && sslMode !== "disable" && sslMode !== "no-verify") {
+                                url.searchParams.set("sslmode", "verify-full");
+                                connectionString = url.toString();
+                        } else if (!sslMode && url.protocol === "postgresql:") {
+                                url.searchParams.set("sslmode", "verify-full");
+                                connectionString = url.toString();
+                        }
+                }
+
+                // Auto-switch to Neon pooled endpoint for stable connections
+                connectionString = ensurePoolerURL(connectionString);
+
                 pool = new Pool({
-                        connectionString: process.env.DATABASE_URL,
+                        connectionString,
                         ...POOL_CONFIG,
                 });
                 
                 pool.on("error", (err) => {
-                        print.error("PostgreSQL pool error:", err.message);
+                        // Suppress noisy "terminating connection due to administrator command" errors.
+                        // This happens when the cloud PostgreSQL provider (Neon/Supabase/Railway)
+                        // kills idle connections after their server-side timeout (usually 5 min).
+                        // The pool automatically creates a fresh connection on the next query.
+                        if (err.message?.includes("terminating connection") || err.message?.includes("administrator command")) {
+                                print.debug("PostgreSQL idle connection reclaimed by server (normal for cloud DBs)");
+                        } else {
+                                print.error("PostgreSQL pool error:", err.message);
+                        }
                 });
                 
                 pool.on("connect", () => {
                         print.debug("PostgreSQL new connection established");
                 });
                 
+                pool.on("remove", () => {
+                        print.debug("PostgreSQL connection removed from pool");
+                });
+                
                 db = drizzle(pool, { schema });
                 
                 await pool.query("SELECT 1");
+                
+                // Run auto-migrations to add new columns to existing tables
+                await runAutoMigrations(pool);
+
+                // ── Keepalive heartbeat ──────────────────────────────────────────
+                // With pooled endpoint this is mostly a safety net — PgBouncer
+                // handles the real connection lifecycle. For direct connections
+                // (local/non-Neon), this prevents OS-level idle kills.
+                keepAliveTimer = setInterval(async () => {
+                        try {
+                                await pool.query("SELECT 1");
+                        } catch {
+                                // Connection was dead — pool will create a fresh one
+                        }
+                }, 30 * 1000);
+                keepAliveTimer.unref();
+
                 print.info(`PostgreSQL connected (pool: min=${POOL_CONFIG.min}, max=${POOL_CONFIG.max})`);
                 
                 return db;
@@ -67,6 +245,10 @@ export function getPool() {
 }
 
 export async function closePostgres() {
+        if (keepAliveTimer) {
+                clearInterval(keepAliveTimer);
+                keepAliveTimer = null;
+        }
         if (pool) {
                 await pool.end();
                 print.info("PostgreSQL connection closed");
@@ -93,20 +275,16 @@ export const UserModel = {
                 if (!db) {
                         return null;
                 }
-                const existing = await this.getUser(jid);
-                if (existing) {
-                        const [updated] = await db
-                                .update(schema.users)
-                                .set({ ...data, updatedAt: new Date() })
-                                .where(eq(schema.users.jid, jid))
-                                .returning();
-                        return updated;
-                }
-                const [created] = await db
+                // UPSERT: single query instead of SELECT + INSERT/UPDATE
+                const [result] = await db
                         .insert(schema.users)
                         .values({ jid, ...data })
+                        .onConflictDoUpdate({
+                                target: schema.users.jid,
+                                set: { ...data, updatedAt: new Date() },
+                        })
                         .returning();
-                return created;
+                return result;
         },
 
         async setBanned(jid, banned = false) {
@@ -142,20 +320,16 @@ export const GroupModel = {
                 if (!db) {
                         return null;
                 }
-                const existing = await this.getGroup(jid);
-                if (existing) {
-                        const [updated] = await db
-                                .update(schema.groups)
-                                .set({ ...data, updatedAt: new Date() })
-                                .where(eq(schema.groups.jid, jid))
-                                .returning();
-                        return updated;
-                }
-                const [created] = await db
+                // UPSERT: single query instead of SELECT + INSERT/UPDATE
+                const [result] = await db
                         .insert(schema.groups)
                         .values({ jid, ...data })
+                        .onConflictDoUpdate({
+                                target: schema.groups.jid,
+                                set: { ...data, updatedAt: new Date() },
+                        })
                         .returning();
-                return created;
+                return result;
         },
 
         async setWelcome(jid, enabled, message = null) {
@@ -304,34 +478,40 @@ export const SettingsModel = {
                 if (!db) {
                         return;
                 }
-                for (const [key, value] of Object.entries(data)) {
-                        await this.setSetting(key, value);
-                }
+                const entries = Object.entries(data);
+                if (entries.length === 0) return;
+                // Batch INSERT — replaces N sequential upserts with a single query.
+                // Uses pool.query() directly for parameterized multi-row VALUES.
+                const values = entries.map(([key, value], i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(',');
+                const params = entries.flatMap(([key, value]) => [key, JSON.stringify(value)]);
+                await pool.query(
+                        `INSERT INTO settings (key, value) VALUES ${values} ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+                        params
+                );
         },
 
         async setSetting(key, value) {
                 if (!db) {
                         return null;
                 }
-                const existing = await this.getSetting(key);
-                if (existing !== null) {
-                        const [updated] = await db
-                                .update(schema.settings)
-                                .set({ value, updatedAt: new Date() })
-                                .where(eq(schema.settings.key, key))
-                                .returning();
-                        return updated;
-                }
-                const [created] = await db
+                // UPSERT: single query instead of SELECT + INSERT/UPDATE
+                const [result] = await db
                         .insert(schema.settings)
                         .values({ key, value })
+                        .onConflictDoUpdate({
+                                target: schema.settings.key,
+                                set: { value, updatedAt: new Date() },
+                        })
                         .returning();
-                return created;
+                return result;
         },
 
         async updateSettings(update) {
                 const current = await this.getSettings();
-                return this.setSettings({ ...current, ...update });
+                const merged = { ...current, ...update };
+                for (const [key, value] of Object.entries(merged)) {
+                        await this.setSetting(key, value);
+                }
         },
 };
 
@@ -578,6 +758,72 @@ export const PermissionModel = {
                                         sql`(expires_at IS NULL OR expires_at > ${now})`
                                 )
                         );
+        },
+};
+
+export const VoiceModel = {
+        /** Save a voice clone. Returns the saved row or null on conflict. */
+        async saveClone(groupJid, name, voiceId, clonedBy) {
+                if (!db) return null;
+                try {
+                        const normalizedName = name.toLowerCase();
+                        const [result] = await db
+                                .insert(schema.voiceClones)
+                                .values({ groupJid, name: normalizedName, voiceId, clonedBy })
+                                .onConflictDoUpdate({
+                                        target: [schema.voiceClones.groupJid, schema.voiceClones.name],
+                                        set: { voiceId, clonedBy },
+                                })
+                                .returning();
+                        console.log(`[VoiceModel.saveClone] saved: group="${groupJid}" name="${normalizedName}" voiceId="${voiceId}"`);
+                        return result;
+                } catch (err) {
+                        print.debug(`VoiceModel.saveClone error: ${err.message}`);
+                        return null;
+                }
+        },
+
+        /** Get a voice clone by name within a specific group. */
+        async getClone(groupJid, name) {
+                if (!db) return null;
+                const searchName = name.toLowerCase();
+                console.log(`[VoiceModel.getClone] group="${groupJid}" name="${name}" → searchName="${searchName}"`);
+                const [row] = await db
+                        .select()
+                        .from(schema.voiceClones)
+                        .where(
+                                and(
+                                        eq(schema.voiceClones.groupJid, groupJid),
+                                        eq(schema.voiceClones.name, searchName),
+                                )
+                        );
+                console.log(`[VoiceModel.getClone] result:`, row ? `id=${row.id} name="${row.name}" voiceId="${row.voiceId}"` : "null");
+                return row || null;
+        },
+
+        /** List all voice clones for a group. */
+        async getGroupClones(groupJid) {
+                if (!db) return [];
+                return db
+                        .select()
+                        .from(schema.voiceClones)
+                        .where(eq(schema.voiceClones.groupJid, groupJid))
+                        .orderBy(desc(schema.voiceClones.createdAt));
+        },
+
+        /** Delete a voice clone by name within a group. Returns true if deleted. */
+        async deleteClone(groupJid, name) {
+                if (!db) return false;
+                const result = await db
+                        .delete(schema.voiceClones)
+                        .where(
+                                and(
+                                        eq(schema.voiceClones.groupJid, groupJid),
+                                        eq(schema.voiceClones.name, name.toLowerCase()),
+                                )
+                        );
+                // result is a QueryResult with rowCount
+                return (result?.rowCount ?? 0) > 0;
         },
 };
 

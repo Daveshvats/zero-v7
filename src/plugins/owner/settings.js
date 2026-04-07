@@ -1,69 +1,73 @@
 import { SettingsModel } from "#lib/database/index";
 
 export default {
-	name: "setting",
-	description: "Enable/disable periodic bot features.",
-	command: ["setting"],
-	category: "owner",
-	owner: true,
-	react: true,
-	wait: null,
-	hidden: true,
-	usage: "$prefix$command <feature> <on|off>",
+        name: "setting",
+        description: "Enable/disable periodic bot features.",
+        command: ["setting"],
+        category: "owner",
+        owner: true,
+        react: true,
+        wait: null,
+        hidden: true,
+        usage: "$prefix$command <feature> <on|off>",
 
-	async execute(m, { args, plugins, pluginManager }) {
-		const [rawFeature, rawValue] = args;
-		const feature = (rawFeature || "").toLowerCase();
-		const value = (rawValue || "").toLowerCase();
+        async execute(m, { args, plugins, pluginManager }) {
+                try {
+                        const [rawFeature, rawValue] = args;
+                        const feature = (rawFeature || "").toLowerCase();
+                        const value = (rawValue || "").toLowerCase();
 
-		const periodicFeatures = getPeriodicFeatures(plugins);
+                        const periodicFeatures = getPeriodicFeatures(plugins);
 
-		const current = await SettingsModel.getSettings();
-		const featureList = periodicFeatures
-			.map((f) => `- *${f}*: ${current[f] ? "ON" : "OFF"}`)
-			.join("\n");
+                        const current = await SettingsModel.getSettings();
+                        const featureList = periodicFeatures
+                                .map((f) => `- *${f}*: ${current[f] ? "ON" : "OFF"}`)
+                                .join("\n");
 
-		const helpMsg =
-			`*Bot Feature Settings*\n\n${featureList}\n\n` +
-			`Usage: ${this.usage.replace("$prefix", m.prefix).replace("$command", this.command[0])}\n` +
-			`Example: ${m.prefix}${this.command[0]} autobackup off`;
+                        const helpMsg =
+                                `*Bot Feature Settings*\n\n${featureList}\n\n` +
+                                `Usage: ${this.usage.replace("$prefix", m.prefix).replace("$command", this.command[0])}\n` +
+                                `Example: ${m.prefix}${this.command[0]} autobackup off`;
 
-		if (
-			!feature ||
-			!value ||
-			!["on", "off"].includes(value) ||
-			!periodicFeatures.includes(feature)
-		) {
-			return m.reply(helpMsg.trim());
-		}
+                        if (
+                                !feature ||
+                                !value ||
+                                !["on", "off"].includes(value) ||
+                                !periodicFeatures.includes(feature)
+                        ) {
+                                return m.reply(helpMsg.trim());
+                        }
 
-		const update = {};
-		update[feature] = value === "on";
-		await SettingsModel.updateSettings(update);
+                        const update = {};
+                        update[feature] = value === "on";
+                        await SettingsModel.updateSettings(update);
 
-		const targetPlugin = plugins.find(
-			(p) =>
-				typeof p.name === "string" && p.name.toLowerCase() === feature
-		);
+                        const targetPlugin = plugins.find(
+                                (p) =>
+                                        typeof p.name === "string" && p.name.toLowerCase() === feature
+                        );
 
-		if (targetPlugin && targetPlugin.periodic) {
-			const enabled = value === "on";
-			targetPlugin.periodic.enabled = enabled;
+                        if (targetPlugin && targetPlugin.periodic) {
+                                const enabled = value === "on";
+                                targetPlugin.periodic.enabled = enabled;
 
-			if (
-				pluginManager &&
-				typeof pluginManager.startPeriodicTask === "function"
-			) {
-				if (enabled) {
-					pluginManager.startPeriodicTask(targetPlugin);
-				} else {
-					pluginManager.stopPeriodicTask(targetPlugin.name);
-				}
-			}
-		}
+                                if (
+                                        pluginManager &&
+                                        typeof pluginManager.startPeriodicTask === "function"
+                                ) {
+                                        if (enabled) {
+                                                pluginManager.startPeriodicTask(targetPlugin);
+                                        } else {
+                                                pluginManager.stopPeriodicTask(targetPlugin.name);
+                                        }
+                                }
+                        }
 
-		m.reply(`Feature *${feature}* is now *${value.toUpperCase()}*`);
-	},
+                        m.reply(`Feature *${feature}* is now *${value.toUpperCase()}*`);
+                } catch (error) {
+                        await m.reply(`❌ Error: ${error.message || 'Unknown error occurred'}`);
+                }
+        },
 };
 
 /**
@@ -72,13 +76,13 @@ export default {
  * @returns {Array<string>}
  */
 function getPeriodicFeatures(plugins) {
-	return plugins
-		.filter(
-			(p) =>
-				p &&
-				p.periodic &&
-				typeof p.periodic.run === "function" &&
-				typeof p.name === "string"
-		)
-		.map((p) => p.name.toLowerCase());
+        return plugins
+                .filter(
+                        (p) =>
+                                p &&
+                                p.periodic &&
+                                typeof p.periodic.run === "function" &&
+                                typeof p.name === "string"
+                )
+                .map((p) => p.name.toLowerCase());
 }

@@ -8,296 +8,341 @@ import { Client } from "#lib/serialize";
 import Store from "#lib/store";
 import NodeCache from "@cacheable/node-cache";
 import {
-	Browsers,
-	DisconnectReason,
-	fetchLatestBaileysVersion,
-	getAggregateVotesInPollMessage,
-	jidNormalizedUser,
-	makeCacheableSignalKeyStore,
-	makeWASocket,
+        Browsers,
+        DisconnectReason,
+        fetchLatestBaileysVersion,
+        getAggregateVotesInPollMessage,
+        jidNormalizedUser,
+        makeCacheableSignalKeyStore,
+        makeWASocket,
 } from "baileys";
 import qrcode from "qrcode";
 
 const msgRetryCounterCache = new NodeCache();
 
+/** Max reconnect attempts before giving up on a loggedOut session */
+const MAX_RECONNECT_ATTEMPTS = 3;
+
 /**
  * Main class to manage the WhatsApp bot connection and events.
  */
 class Connect {
-	constructor() {
-		this.sock = null;
-		this.sessionName = BOT_CONFIG.sessionName;
+        constructor() {
+                this.sock = null;
+                this.sessionName = BOT_CONFIG.sessionName;
+                this._initialized = false;
+                this._reconnectCount = 0;
 
-		this.groupMetadataCache = new NodeCache({
-			stdTTL: 60 * 60,
-			checkperiod: 120,
-		});
+                this.groupMetadataCache = new NodeCache({
+                        stdTTL: 60 * 60,
+                        checkperiod: 120,
+                });
 
-		this.pluginManager = new PluginManager(BOT_CONFIG);
-		this.store = new Store(this.sessionName);
-		this.message = new Message(
-			this.pluginManager,
-			BOT_CONFIG.ownerJids,
-			BOT_CONFIG.prefixes,
-			this.groupMetadataCache,
-			this.store
-		);
-	}
+                this.store = new Store(this.sessionName);
+                this.pluginManager = new PluginManager(BOT_CONFIG, this.store);
 
-	/**
-	 * Start Baileys connection and manages events.
-	 */
-	async start() {
-		print.info(`Starting WhatsApp Bot session: ${this.sessionName}`);
+                this.message = new Message(
+                        this.pluginManager,
+                        BOT_CONFIG.ownerJids,
+                        BOT_CONFIG.prefixes,
+                        this.groupMetadataCache,
+                        this.store
+                );
+        }
 
-		await this.store.load();
-		this.store.savePeriodically();
+        /**
+         * One-time initialization: load store, plugins, auth state.
+         * Only runs once; subsequent calls are no-ops.
+         */
+        async _init() {
+                if (this._initialized) return;
 
-		const { state, saveCreds, removeCreds } = await getAuthState(
-			this.sessionName
-		);
+                print.info(`Starting WhatsApp Bot session: ${this.sessionName}`);
 
-		const qrMode = process.env.QR === "true";
-		const botNumber = process.env.BOT_NUMBER;
-		let usePairingCode = false;
-		if (!state.creds.registered) {
-			if (!qrMode) {
-				if (!botNumber) {
-					print.error(
-						"BOT_NUMBER is not set in .env. Please set BOT_NUMBER."
-					);
-					process.exit(1);
-				}
-				usePairingCode = true;
-			} else {
-				usePairingCode = false;
-			}
-		}
+                await this.store.load();
+                this.store.savePeriodically();
 
-		const { version } = await fetchLatestBaileysVersion();
-		print.info(`Baileys version: ${version.join(".")}`);
+                const { version } = await fetchLatestBaileysVersion();
+                this._version = version;
+                print.info(`Baileys version: ${version.join(".")}`);
 
-		await this.pluginManager.loadPlugins();
-		this.pluginManager.watchPlugins();
+                await this.pluginManager.loadPlugins();
+                this.pluginManager.watchPlugins();
 
-		this.sock = makeWASocket({
-			auth: {
-				creds: state.creds,
-				keys: makeCacheableSignalKeyStore(state.keys, logger),
-			},
-			version,
-			logger,
-			getMessage: async (key) => {
-				const jid = jidNormalizedUser(key.remoteJid);
-				return this.store.loadMessage(jid, key.id)?.message || null;
-			},
-			getGroupMetadata: async (jid) => {
-				const normalizedJid = jidNormalizedUser(jid);
+                this._initialized = true;
+        }
 
-				let metadata = this.groupMetadataCache.get(normalizedJid);
-				if (metadata) {
-					return metadata;
-				}
+        /**
+         * Create the Baileys socket, attach all event handlers.
+         * This is the method that can be called multiple times for reconnects.
+         */
+        async _connect() {
+                if (!this._initialized) {
+                        await this._init();
+                }
 
-				metadata = this.store.getGroupMetadata(normalizedJid);
-				if (metadata) {
-					this.groupMetadataCache.set(normalizedJid, metadata);
-					return metadata;
-				}
+                const { state, saveCreds, removeCreds } = await getAuthState(
+                        this.sessionName
+                );
 
-				try {
-					metadata = await this.sock.groupMetadata(jid);
-					this.groupMetadataCache.set(normalizedJid, metadata);
-					this.store.setGroupMetadata(normalizedJid, metadata);
-					print.debug(`Cached metadata for group: ${jid}`);
-					return metadata;
-				} catch (e) {
-					print.error(
-						`Failed to fetch group metadata for ${jid}:`,
-						e
-					);
-					return null;
-				}
-			},
-			browser: Browsers.macOS("Safari"),
-			syncFullHistory: false,
-			generateHighQualityLinkPreview: true,
-			qrTimeout: usePairingCode ? undefined : 60000,
-			printQRInTerminal: qrMode,
-			msgRetryCounterCache,
-		});
+                const qrMode = process.env.QR === "true";
+                const botNumber = process.env.BOT_NUMBER;
+                const usePairingCode = !qrMode && !state.creds.registered;
 
-		this.sock = Client({ sock: this.sock, store: this.store });
+                if (!qrMode && !state.creds.registered && !botNumber) {
+                        print.error(
+                                "BOT_NUMBER is not set in .env. Please set BOT_NUMBER for pairing code."
+                        );
+                        process.exit(1);
+                }
 
-		this.pluginManager.scheduleAllPeriodicTasks(this.sock);
+                // Close old socket if it exists (clean reconnect)
+                if (this.sock?.ws) {
+                        try {
+                                this.sock.ws.close();
+                        } catch {}
+                }
 
-		this.sock.ev.on("creds.update", saveCreds);
-		this.sock.ev.on("contacts.update", (update) => {
-			this.store.updateContacts(update);
-		});
-		this.sock.ev.on("contacts.upsert", (update) => {
-			this.store.upsertContacts(update);
-		});
-		this.sock.ev.on("groups.update", (updates) => {
-			this.store.updateGroupMetadata(updates);
-		});
-		this.sock.ev.on("connection.update", async (update) => {
-			const { connection, lastDisconnect, qr } = update;
+                print.info(`Connecting WhatsApp session: ${this.sessionName}`);
 
-			if (!usePairingCode && qr) {
-				print.info(`Scan QR Code for session ${this.sessionName}:`);
-				console.log(
-					await qrcode.toString(qr, { type: "terminal", small: true })
-				);
-			}
+                const rawSock = makeWASocket({
+                        auth: {
+                                creds: state.creds,
+                                keys: makeCacheableSignalKeyStore(state.keys, logger),
+                        },
+                        version: this._version,
+                        logger,
+                        getMessage: async (key) => {
+                                const jid = jidNormalizedUser(key.remoteJid);
+                                return this.store.loadMessage(jid, key.id)?.message || null;
+                        },
+                        getGroupMetadata: async (jid) => {
+                                const normalizedJid = jidNormalizedUser(jid);
 
-			if (
-				usePairingCode &&
-				connection === "connecting" &&
-				!state.creds.registered
-			) {
-				const phoneNumber = botNumber;
-				if (phoneNumber) {
-					setTimeout(async () => {
-						try {
-							const code = await this.sock.requestPairingCode(
-								phoneNumber.trim()
-							);
-							print.info(`Your Pairing Code: ${code}`);
-							print.info(
-								"Enter this code on your WhatsApp phone: Settings -> Linked Devices -> Link a Device -> Link with phone number instead."
-							);
-						} catch (e) {
-							print.error("Failed to request pairing code:", e);
-						}
-					}, 6000);
-				} else {
-					print.error(
-						"No BOT_NUMBER provided for pairing code. Please set BOT_NUMBER in .env and restart the bot."
-					);
-					process.exit(1);
-				}
-			}
+                                let metadata = this.groupMetadataCache.get(normalizedJid);
+                                if (metadata) {
+                                        return metadata;
+                                }
 
-			if (connection === "close") {
-				const shouldReconnect =
-					lastDisconnect?.error?.output?.statusCode !==
-					DisconnectReason.loggedOut;
-				print.warn(
-					`Connection closed for session ${this.sessionName}. Reason: ${lastDisconnect?.error?.message || "Unknown"}. Reconnecting: ${shouldReconnect}`
-				);
+                                metadata = this.store.getGroupMetadata(normalizedJid);
+                                if (metadata) {
+                                        this.groupMetadataCache.set(normalizedJid, metadata);
+                                        return metadata;
+                                }
 
-				if (
-					lastDisconnect?.error?.output?.statusCode ===
-					DisconnectReason.loggedOut
-				) {
-					await removeCreds();
-					print.info(
-						`Session ${this.sessionName} logged out. Credentials removed. Please restart bot to get a new QR code.`
-					);
-				}
+                                try {
+                                        metadata = await this.sock.groupMetadata(jid);
+                                        this.groupMetadataCache.set(normalizedJid, metadata);
+                                        this.store.setGroupMetadata(normalizedJid, metadata);
+                                        print.debug(`Cached metadata for group: ${jid}`);
+                                        return metadata;
+                                } catch (e) {
+                                        print.error(
+                                                `Failed to fetch group metadata for ${jid}:`,
+                                                e
+                                        );
+                                        return null;
+                                }
+                        },
+                        browser: Browsers.macOS("Safari"),
+                        syncFullHistory: false,
+                        generateHighQualityLinkPreview: true,
+                        qrTimeout: usePairingCode ? undefined : 60000,
+                        msgRetryCounterCache,
+                });
 
-				if (shouldReconnect) {
-					setTimeout(() => this.start(), 3000);
-				} else {
-					this.store.stopSaving();
-					process.exit(1);
-				}
-			} else if (connection === "open") {
-				print.info(
-					`Connection opened successfully for session ${this.sessionName}.`
-				);
-			}
-		});
+                this.sock = Client({ sock: rawSock, store: this.store });
 
-		this.sock.ev.on("messages.upsert", (data) =>
-			this.message.process(this.sock, data)
-		);
+                this.pluginManager.scheduleAllPeriodicTasks(this.sock);
+                this.pluginManager.store = this.store;
 
-		this.sock.ev.on("messages.update", async (event) => {
-			for (const { key, update } of event) {
-				if (update.pollUpdates) {
-					const pollCreation = await this.store.loadMessage(
-						jidNormalizedUser(key.remoteJid),
-						key.id
-					);
-					if (pollCreation && pollCreation.message) {
-						const aggregate = getAggregateVotesInPollMessage({
-							message: pollCreation.message,
-							pollUpdates: update.pollUpdates,
-						});
-						print.info("Got poll update, aggregation:", aggregate);
-					}
-				}
-			}
-		});
+                // ── Event Handlers ──────────────────────────────────────────
 
-		this.sock.ev.on(
-			"group-participants.update",
-			async ({ id, participants, action }) => {
-				const participantJids = participants
-					.map((p) => (typeof p === "string" ? p : p?.id))
-					.filter(Boolean)
-					.map(jidNormalizedUser);
+                this.sock.ev.on("creds.update", saveCreds);
 
-				print.info(
-					`Group participants updated for ${id}: ${action} ${participantJids.join(", ")}`
-				);
+                this.sock.ev.on("contacts.update", (update) => {
+                        this.store.updateContacts(update);
+                });
 
-				const normalizedJid = jidNormalizedUser(id);
-				let metadata =
-					this.groupMetadataCache.get(normalizedJid) ||
-					this.store.getGroupMetadata(normalizedJid);
+                this.sock.ev.on("contacts.upsert", (update) => {
+                        this.store.upsertContacts(update);
+                });
 
-				if (!metadata) {
-					try {
-						metadata = await this.sock.groupMetadata(id);
-					} catch (e) {
-						print.error(`Failed to fetch metadata for ${id}:`, e);
-						return;
-					}
-				}
+                this.sock.ev.on("groups.update", (updates) => {
+                        this.store.updateGroupMetadata(updates);
+                });
 
-				switch (action) {
-					case "add":
-						participantJids.forEach((pid) => {
-							if (
-								!metadata.participants.some((p) => p.id === pid)
-							) {
-								metadata.participants.push({
-									id: pid,
-									admin: null,
-								});
-							}
-						});
-						break;
-					case "promote":
-						metadata.participants.forEach((p) => {
-							if (participantJids.includes(p.id)) {
-								p.admin = "admin";
-							}
-						});
-						break;
-					case "demote":
-						metadata.participants.forEach((p) => {
-							if (participantJids.includes(p.id)) {
-								p.admin = null;
-							}
-						});
-						break;
-					case "remove":
-						metadata.participants = metadata.participants.filter(
-							(p) => !participantJids.includes(p.id)
-						);
-						break;
-				}
+                this.sock.ev.on("messages.upsert", (data) =>
+                        this.message.process(this.sock, data)
+                );
 
-				this.groupMetadataCache.set(normalizedJid, metadata);
-				this.store.setGroupMetadata(normalizedJid, metadata);
-				print.debug(`Updated group metadata cache for ${id}`);
-			}
-		);
-	}
+                this.sock.ev.on("messages.update", async (event) => {
+                        for (const { key, update } of event) {
+                                if (update.pollUpdates) {
+                                        const pollCreation = await this.store.loadMessage(
+                                                jidNormalizedUser(key.remoteJid),
+                                                key.id
+                                        );
+                                        if (pollCreation && pollCreation.message) {
+                                                const aggregate = getAggregateVotesInPollMessage({
+                                                        message: pollCreation.message,
+                                                        pollUpdates: update.pollUpdates,
+                                                });
+                                                print.info("Got poll update, aggregation:", aggregate);
+                                        }
+                                }
+                        }
+                });
+
+                this.sock.ev.on(
+                        "group-participants.update",
+                        async ({ id, participants, action }) => {
+                                const participantJids = participants
+                                        .map((p) => (typeof p === "string" ? p : p?.id))
+                                        .filter(Boolean)
+                                        .map(jidNormalizedUser);
+
+                                print.info(
+                                        `Group participants updated for ${id}: ${action} ${participantJids.join(", ")}`
+                                );
+
+                                const normalizedJid = jidNormalizedUser(id);
+                                let metadata =
+                                        this.groupMetadataCache.get(normalizedJid) ||
+                                        this.store.getGroupMetadata(normalizedJid);
+
+                                if (!metadata) {
+                                        try {
+                                                metadata = await this.sock.groupMetadata(id);
+                                        } catch (e) {
+                                                print.error(`Failed to fetch metadata for ${id}:`, e);
+                                                return;
+                                        }
+                                }
+
+                                switch (action) {
+                                        case "add":
+                                                participantJids.forEach((pid) => {
+                                                        if (
+                                                                !metadata.participants.some((p) => p.id === pid)
+                                                        ) {
+                                                                metadata.participants.push({
+                                                                        id: pid,
+                                                                        admin: null,
+                                                                });
+                                                        }
+                                                });
+                                                break;
+                                        case "promote":
+                                                metadata.participants.forEach((p) => {
+                                                        if (participantJids.includes(p.id)) {
+                                                                p.admin = "admin";
+                                                        }
+                                                });
+                                                break;
+                                        case "demote":
+                                                metadata.participants.forEach((p) => {
+                                                        if (participantJids.includes(p.id)) {
+                                                                p.admin = null;
+                                                        }
+                                                });
+                                                break;
+                                        case "remove":
+                                                metadata.participants = metadata.participants.filter(
+                                                        (p) => !participantJids.includes(p.id)
+                                                );
+                                                break;
+                                }
+
+                                this.groupMetadataCache.set(normalizedJid, metadata);
+                                this.store.setGroupMetadata(normalizedJid, metadata);
+                                print.debug(`Updated group metadata cache for ${id}`);
+                        }
+                );
+
+                // ── Connection lifecycle ───────────────────────────────────
+
+                this.sock.ev.on("connection.update", async (update) => {
+                        const { connection, lastDisconnect, qr } = update;
+
+                        if (!usePairingCode && qr) {
+                                print.info(`Scan QR Code for session ${this.sessionName}:`);
+                                console.log(
+                                        await qrcode.toString(qr, { type: "terminal", small: true })
+                                );
+                        }
+
+                        if (
+                                usePairingCode &&
+                                connection === "connecting" &&
+                                !state.creds.registered
+                        ) {
+                                if (botNumber) {
+                                        setTimeout(async () => {
+                                                try {
+                                                        const code = await this.sock.requestPairingCode(
+                                                                botNumber.trim()
+                                                        );
+                                                        print.info(`Your Pairing Code: ${code}`);
+                                                        print.info(
+                                                                "Enter this code on your WhatsApp phone: Settings -> Linked Devices -> Link a Device -> Link with phone number instead."
+                                                        );
+                                                } catch (e) {
+                                                        print.error("Failed to request pairing code:", e);
+                                                }
+                                        }, 6000);
+                                }
+                        }
+
+                        if (connection === "open") {
+                                this._reconnectCount = 0;
+                                print.info(
+                                        `Connection opened successfully for session ${this.sessionName}.`
+                                );
+                                return;
+                        }
+
+                        if (connection !== "close") return;
+
+                        const statusCode = lastDisconnect?.error?.output?.statusCode;
+                        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+
+                        print.warn(
+                                `Connection closed. Reason: ${lastDisconnect?.error?.message || "Unknown"}. StatusCode: ${statusCode}.`
+                        );
+
+                        if (isLoggedOut) {
+                                this._reconnectCount++;
+                                if (this._reconnectCount > MAX_RECONNECT_ATTEMPTS) {
+                                        print.error(
+                                                `Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached for loggedOut session. Exiting.`
+                                        );
+                                        this.store.stopSaving();
+                                        process.exit(1);
+                                }
+                                await removeCreds();
+                                print.info(
+                                        `Session logged out. Credentials cleared. Reconnecting for fresh QR (attempt ${this._reconnectCount}/${MAX_RECONNECT_ATTEMPTS})...`
+                                );
+                                clearTimeout(this._reconnectTimer);
+                                this._reconnectTimer = setTimeout(() => this._connect(), 3000);
+                                return;
+                        }
+
+                        // All other disconnects: reconnect immediately
+                        print.info(`Reconnecting in 3s...`);
+                        clearTimeout(this._reconnectTimer);
+                        this._reconnectTimer = setTimeout(() => this._connect(), 3000);
+                });
+        }
+
+        /**
+         * Public start method — initializes once, then connects.
+         */
+        async start() {
+                await this._init();
+                await this._connect();
+        }
 }
 
 export default Connect;

@@ -1,4 +1,5 @@
-import axios from "axios";
+import { submitPollAndSend } from "#lib/ai-helper";
+import itsrose from "#lib/itsrose";
 
 // Hardcoded supported expressions for instant help
 const EXPRESSIONS = [
@@ -16,7 +17,6 @@ export default {
     cooldown: 5,
 
     async execute(m, { api }) {
-        const apiKey = "sk_PNcLyV1b7EU6lGCMrOMPJBRyHPcHcojdHc-INT1qsrw";
         const args = m.text ? m.text.trim().split(/\s+/) : [];
         const input = args[0] ? args[0].toLowerCase() : null;
 
@@ -48,55 +48,23 @@ export default {
             if (!buffer) return m.reply("❌ Failed to download image.");
 
             // --- 4. SUBMIT TO API ---
-            const submit = await axios.post("https://api.itsrose.net/image/facial_expression", {
+            const submit = await itsrose.post("/image/facial_expression", {
                 expression: input,
-                pci: true, // Enhance quality
-                cttp: true, // Context processing
+                pci: true,
+                cttp: true,
                 init_image: buffer.toString("base64"),
-                sync: false // Set to false to handle polling for stability
-            }, {
-                headers: { 
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${apiKey}` 
-                }
+                sync: false
             }).catch(e => e.response);
 
-            if (!submit?.data?.status) {
+            if (!submit?.data?.ok) {
                 return m.reply(`❌ API Error: ${submit?.data?.message || "Server error"}`);
             }
 
-            // --- 5. POLLING (Check Result) ---
-            const taskId = submit.data.result.task_id;
-            let attempts = 0;
-
-            while (attempts < 35) {
-                await new Promise(r => setTimeout(r, 4000)); // Check every 4s
-                
-                const check = await axios.get("https://api.itsrose.net/image/get_task", {
-                    params: { task_id: taskId },
-                    headers: { Authorization: `Bearer ${apiKey}` }
-                });
-
-                if (check.data?.status && check.data?.result) {
-                    const res = check.data.result;
-                    
-                    if (res.status === "completed") {
-                        const images = res.images || [];
-                        // Parallel sending for better performance
-                        await Promise.all(images.map(url => 
-                            m.reply({ image: { url }, caption: `✅ Expression: ${input}` })
-                        ));
-                        return;
-                    }
-
-                    if (res.status === "failed") {
-                        return m.reply("❌ Failed to modify the face in this image.");
-                    }
-                }
-                attempts++;
-            }
-
-            return m.reply("⏰ Request timed out. The server is busy.");
+            // --- 5. POLLING + SEND ---
+            return submitPollAndSend(m, submit.data.data, `✅ Expression: ${input}`, {
+                pollPath: '/image/get_task',
+                label: 'Facial Expression',
+            });
 
         } catch (e) {
             console.error("EXPRESSION ERROR:", e);

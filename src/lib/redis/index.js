@@ -107,7 +107,16 @@ export const cache = {
 
         async keys(pattern) {
                 if (redis) {
-                        return redis.keys(pattern);
+                        // Use SCAN instead of KEYS — KEYS is O(N) and blocks the server.
+                        // SCAN is non-blocking and returns results incrementally.
+                        const allKeys = [];
+                        let cursor = 0;
+                        do {
+                                const [nextCursor, matchedKeys] = await redis.scan(cursor, { match: pattern, count: 100 });
+                                cursor = nextCursor;
+                                allKeys.push(...matchedKeys);
+                        } while (cursor !== 0);
+                        return allKeys;
                 }
                 const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
                 return Array.from(memoryCache.keys()).filter((k) => regex.test(k));
@@ -187,19 +196,28 @@ export const rateLimitService = {
         },
 
         async checkLimit(userId, maxRequests, windowSeconds) {
+                if (redis) {
+                        // Use incr + expire instead of incr + set to avoid race condition:
+                        // Old pattern: incr → set (could overwrite a concurrent incr's value).
+                        // New pattern: incr → expire (only sets TTL, never touches the value).
+                        const key = `ratelimit:${userId}:${Math.floor(Date.now() / 1000 / windowSeconds)}`;
+                        const count = await redis.incr(key);
+                        if (count === 1) {
+                                await redis.expire(key, windowSeconds);
+                        }
+                        return { allowed: count <= maxRequests, remaining: Math.max(0, maxRequests - count), resetTime: windowSeconds };
+                }
+                // Memory fallback — cache.incr/set handle TTL correctly for in-memory Map
                 const window = Math.floor(Date.now() / (windowSeconds * 1000));
                 const key = this.getKey(userId, window);
-                
                 const count = await cache.incr(key);
-                
                 if (count === 1) {
                         await cache.set(key, count, windowSeconds);
                 }
-                
                 return {
                         allowed: count <= maxRequests,
                         remaining: Math.max(0, maxRequests - count),
-                        resetIn: windowSeconds,
+                        resetTime: windowSeconds,
                 };
         },
 };

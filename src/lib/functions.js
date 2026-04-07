@@ -1,295 +1,310 @@
 import axios from "axios";
 import { fileTypeFromBuffer } from "file-type";
-import { Jimp, JimpMime } from "jimp";
+import sharp from "sharp";
+import { access, constants, readFile, stat } from "node:fs/promises";
 import { existsSync, promises, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export const getRandom = (ext) => {
-	return `${Math.floor(Math.random() * 10000)}${ext}`;
+        return `${Math.floor(Math.random() * 10000)}${ext}`;
 };
 
+// TODO: fetchBuffer uses sync fs operations (existsSync, statSync, readFileSync).
+// Consider migrating to async fs/promises for better event loop performance.
 export async function fetchBuffer(string, options = {}) {
-	try {
-		if (/^https?:\/\//i.test(string)) {
-			let data = await axios.get(string, {
-				headers: {
-					...(options.headers || {}),
-				},
-				responseType: "arraybuffer",
-				...options,
-			});
+        try {
+                if (/^https?:\/\//i.test(string)) {
+                        let data = await axios.get(string, {
+                                headers: {
+                                        ...(options.headers || {}),
+                                },
+                                responseType: "arraybuffer",
+                                timeout: options.timeout || 60000,
+                                ...options,
+                        });
 
-			let buffer = data?.data;
-			let name = /filename/i.test(
-				data.headers?.get("content-disposition")
-			)
-				? data.headers
-						?.get("content-disposition")
-						?.match(/filename=(.*)/)?.[1]
-						?.replace(/[""]/g, "")
-				: "";
-			let mime =
-				data.headers.get("content-type") ||
-				(await fileTypeFromBuffer(buffer))?.mime;
+                        let buffer = data?.data;
+                        let name = /filename/i.test(
+                                data.headers?.get("content-disposition")
+                        )
+                                ? data.headers
+                                                ?.get("content-disposition")
+                                                ?.match(/filename=(.*)/)?.[1]
+                                                ?.replace(/[""]/g, "")
+                                : "";
+                        let mime =
+                                data.headers.get("content-type") ||
+                                (await fileTypeFromBuffer(buffer))?.mime;
 
-			return {
-				data: buffer,
-				size: Buffer.byteLength(buffer),
-				sizeH: formatSize(Buffer.byteLength(buffer)),
-				name,
-				mime,
-				ext: mime ? mime.split("/")[1] : ".bin",
-			};
-		}
+                        return {
+                                data: buffer,
+                                size: Buffer.byteLength(buffer),
+                                sizeH: formatSize(Buffer.byteLength(buffer)),
+                                name,
+                                mime,
+                                ext: mime ? mime.split("/")[1] : ".bin",
+                        };
+                }
 
-		if (/^data:.*?\/.*?base64,/i.test(string)) {
-			let data = Buffer.from(string.split`,`[1], "base64");
-			let size = Buffer.byteLength(data);
-			const fileType = await fileTypeFromBuffer(data);
+                if (/^data:.*?\/.*?base64,/i.test(string)) {
+                        let data = Buffer.from(string.split`,`[1], "base64");
+                        let size = Buffer.byteLength(data);
+                        const fileType = await fileTypeFromBuffer(data);
 
-			return {
-				data,
-				size,
-				sizeH: formatSize(size),
-				...(fileType || {
-					mime: "application/octet-stream",
-					ext: ".bin",
-				}),
-			};
-		}
+                        return {
+                                data,
+                                size,
+                                sizeH: formatSize(size),
+                                ...(fileType || {
+                                        mime: "application/octet-stream",
+                                        ext: ".bin",
+                                }),
+                        };
+                }
 
-		if (existsSync(string) && statSync(string).isFile()) {
-			let data = readFileSync(string);
-			let size = Buffer.byteLength(data);
-			const fileType = await fileTypeFromBuffer(data);
+                let filePath = null;
+                try {
+                        await access(string, constants.F_OK);
+                        const fileStat = await stat(string);
+                        if (fileStat.isFile()) {
+                                filePath = string;
+                        }
+                } catch (_) {
+                        // File does not exist, fall through
+                }
+                if (filePath) {
+                        let data = await readFile(filePath);
+                        let size = Buffer.byteLength(data);
+                        const fileType = await fileTypeFromBuffer(data);
 
-			return {
-				data,
-				size,
-				sizeH: formatSize(size),
-				...(fileType || {
-					mime: "application/octet-stream",
-					ext: ".bin",
-				}),
-			};
-		}
+                        return {
+                                data,
+                                size,
+                                sizeH: formatSize(size),
+                                ...(fileType || {
+                                        mime: "application/octet-stream",
+                                        ext: ".bin",
+                                }),
+                        };
+                }
 
-		if (Buffer.isBuffer(string)) {
-			let size = Buffer?.byteLength(string) || 0;
-			const fileType = await fileTypeFromBuffer(string);
+                if (Buffer.isBuffer(string)) {
+                        let size = Buffer?.byteLength(string) || 0;
+                        const fileType = await fileTypeFromBuffer(string);
 
-			return {
-				data: string,
-				size,
-				sizeH: formatSize(size),
-				...(fileType || {
-					mime: "application/octet-stream",
-					ext: ".bin",
-				}),
-			};
-		}
+                        return {
+                                data: string,
+                                size,
+                                sizeH: formatSize(size),
+                                ...(fileType || {
+                                        mime: "application/octet-stream",
+                                        ext: ".bin",
+                                }),
+                        };
+                }
 
-		if (/^[a-zA-Z0-9+/]={0,2}$/i.test(string)) {
-			let data = Buffer.from(string, "base64");
-			let size = Buffer.byteLength(data);
-			const fileType = await fileTypeFromBuffer(data);
+                if (/^[a-zA-Z0-9+/]={0,2}$/i.test(string)) {
+                        let data = Buffer.from(string, "base64");
+                        let size = Buffer.byteLength(data);
+                        const fileType = await fileTypeFromBuffer(data);
 
-			return {
-				data,
-				size,
-				sizeH: formatSize(size),
-				...(fileType || {
-					mime: "application/octet-stream",
-					ext: ".bin",
-				}),
-			};
-		}
+                        return {
+                                data,
+                                size,
+                                sizeH: formatSize(size),
+                                ...(fileType || {
+                                        mime: "application/octet-stream",
+                                        ext: ".bin",
+                                }),
+                        };
+                }
 
-		let buffer = Buffer.alloc(20);
-		let size = Buffer.byteLength(buffer);
-		const fileType = await fileTypeFromBuffer(buffer);
+                let buffer = Buffer.alloc(20);
+                let size = Buffer.byteLength(buffer);
+                const fileType = await fileTypeFromBuffer(buffer);
 
-		return {
-			data: buffer,
-			size,
-			sizeH: formatSize(size),
-			...(fileType || {
-				mime: "application/octet-stream",
-				ext: ".bin",
-			}),
-		};
-	} catch (e) {
-		throw new Error(e?.message || e);
-	}
+                return {
+                        data: buffer,
+                        size,
+                        sizeH: formatSize(size),
+                        ...(fileType || {
+                                mime: "application/octet-stream",
+                                ext: ".bin",
+                        }),
+                };
+        } catch (e) {
+                throw new Error(e?.message || e);
+        }
 }
 
 export async function getFile(PATH, save) {
-	let filename = null;
-	let data = await fetchBuffer(PATH);
+        let filename = null;
+        let data = await fetchBuffer(PATH);
 
-	if (data?.data && save) {
-		filename = join(process.cwd(), "temp", `${Date.now()}.${data.ext}`);
-		await promises.writeFile(filename, data.data);
-	}
+        if (data?.data && save) {
+                filename = join(process.cwd(), "temp", `${Date.now()}.${data.ext}`);
+                await promises.writeFile(filename, data.data);
+        }
 
-	return {
-		filename: data.filename || filename,
-		...data,
-	};
+        return {
+                filename: data.filename || filename,
+                ...data,
+        };
 }
 
 export const getBuffer = async (url, options = {}) => {
-	const res = await axios({
-		method: "get",
-		url,
-		headers: {
-			DNT: 1,
-			"Upgrade-Insecure-Request": 1,
-		},
-		...options,
-		responseType: "arraybuffer",
-	});
-	return res.data;
+        const res = await axios({
+                method: "get",
+                url,
+                headers: {
+                        DNT: 1,
+                        "Upgrade-Insecure-Request": 1,
+                },
+                ...options,
+                timeout: options.timeout || 15000,
+                responseType: "arraybuffer",
+        });
+        return res.data;
 };
 
 export const formatSize = (bytes) => {
-	const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
-	if (bytes === 0) {
-		return "0 Bytes";
-	}
-	const i = Math.floor(Math.log(bytes) / Math.log(1024));
-	return (bytes / Math.pow(1024, i)).toFixed(2) + " " + sizes[i];
+        const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+        if (bytes === 0) {
+                return "0 Bytes";
+        }
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return (bytes / Math.pow(1024, i)).toFixed(2) + " " + sizes[i];
 };
 
 export const fetchJson = async (url, options = {}) => {
-	try {
-		const res = await axios({
-			method: "GET",
-			url: url,
-			headers: {
-				"User-Agent":
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36",
-			},
-			...options,
-		});
-		return res.data;
-	} catch (err) {
-		console.error("Error fetching JSON:", err);
-		throw err;
-	}
+        try {
+                const res = await axios({
+                        method: "GET",
+                        url: url,
+                        headers: {
+                                "User-Agent":
+                                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36",
+                        },
+                        ...options,
+                        timeout: options.timeout || 15000,
+                });
+                return res.data;
+        } catch (err) {
+                console.error("Error fetching JSON:", err);
+                throw err;
+        }
 };
 
 export const runtime = (seconds) => {
-	seconds = Number(seconds);
-	const d = Math.floor(seconds / (3600 * 24));
-	const h = Math.floor((seconds % (3600 * 24)) / 3600);
-	const m = Math.floor((seconds % 3600) / 60);
-	const s = Math.floor(seconds % 60);
+        seconds = Number(seconds);
+        const d = Math.floor(seconds / (3600 * 24));
+        const h = Math.floor((seconds % (3600 * 24)) / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
 
-	const dDisplay = d > 0 ? d + (d == 1 ? " day, " : " days, ") : "";
-	const hDisplay = h > 0 ? h + (h == 1 ? " hour, " : " hours, ") : "";
-	const mDisplay = m > 0 ? m + (m == 1 ? " minute, " : " minutes, ") : "";
-	const sDisplay = s > 0 ? s + (s == 1 ? " second" : " seconds") : "";
+        const dDisplay = d > 0 ? d + (d == 1 ? " day, " : " days, ") : "";
+        const hDisplay = h > 0 ? h + (h == 1 ? " hour, " : " hours, ") : "";
+        const mDisplay = m > 0 ? m + (m == 1 ? " minute, " : " minutes, ") : "";
+        const sDisplay = s > 0 ? s + (s == 1 ? " second" : " seconds") : "";
 
-	return dDisplay + hDisplay + mDisplay + sDisplay;
+        return dDisplay + hDisplay + mDisplay + sDisplay;
 };
 
 export const clockString = (ms) => {
-	const h = isNaN(ms) ? "--" : Math.floor(ms / 3600000);
-	const m = isNaN(ms) ? "--" : Math.floor(ms / 60000) % 60;
-	const s = isNaN(ms) ? "--" : Math.floor(ms / 1000) % 60;
-	return [h, m, s].map((v) => v.toString().padStart(2, "0")).join(":");
+        const h = isNaN(ms) ? "--" : Math.floor(ms / 3600000);
+        const m = isNaN(ms) ? "--" : Math.floor(ms / 60000) % 60;
+        const s = isNaN(ms) ? "--" : Math.floor(ms / 1000) % 60;
+        return [h, m, s].map((v) => v.toString().padStart(2, "0")).join(":");
 };
 
 export const reSize = async (buffer, width, height) => {
-	const img = await Jimp.read(buffer);
-	return img.resize(width, height).getBuffer(JimpMime.jpeg);
+        return sharp(buffer).resize(width, height).jpeg().toBuffer();
 };
 
-export const sleep = async (ms) => {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-};
+// NOTE: `sleep` was removed as a duplicate of `delay`. Use `delay(ms)` instead.
 
 export const isUrl = (url) => {
-	return url.match(
-		new RegExp(
-			/https?:\/\/(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&/=]*)/,
-			"gi"
-		)
-	);
+        return url.match(
+                new RegExp(
+                        /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&/=]*)/,
+                        "gi"
+                )
+        );
 };
 
 export const formatDate = (n, locale = "id") => {
-	const d = new Date(n);
-	return d.toLocaleDateString(locale, {
-		weekday: "long",
-		day: "numeric",
-		month: "long",
-		year: "numeric",
-		hour: "numeric",
-		minute: "numeric",
-		second: "numeric",
-	});
+        const d = new Date(n);
+        return d.toLocaleDateString(locale, {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+                hour: "numeric",
+                minute: "numeric",
+                second: "numeric",
+        });
 };
 
 export const tanggal = (numer) => {
-	const myMonths = [
-		"Januari",
-		"Februari",
-		"Maret",
-		"April",
-		"Mei",
-		"Juni",
-		"Juli",
-		"Agustus",
-		"September",
-		"Oktober",
-		"November",
-		"Desember",
-	];
-	const myDays = [
-		"Minggu",
-		"Senin",
-		"Selasa",
-		"Rabu",
-		"Kamis",
-		"Jum'at",
-		"Sabtu",
-	];
+        const myMonths = [
+                "Januari",
+                "Februari",
+                "Maret",
+                "April",
+                "Mei",
+                "Juni",
+                "Juli",
+                "Agustus",
+                "September",
+                "Oktober",
+                "November",
+                "Desember",
+        ];
+        const myDays = [
+                "Minggu",
+                "Senin",
+                "Selasa",
+                "Rabu",
+                "Kamis",
+                "Jum'at",
+                "Sabtu",
+        ];
 
-	const tgl = new Date(numer);
-	const day = tgl.getDate();
-	const bulan = tgl.getMonth();
-	const thisDay = myDays[tgl.getDay()];
-	const yy = tgl.getYear();
-	const year = yy < 1000 ? yy + 1900 : yy;
+        const tgl = new Date(numer);
+        const day = tgl.getDate();
+        const bulan = tgl.getMonth();
+        const thisDay = myDays[tgl.getDay()];
+        // BUG FIX: getYear() is deprecated and returns year - 1900. Use getFullYear() instead.
+        const year = tgl.getFullYear();
 
-	return `${thisDay}, ${day} - ${myMonths[bulan]} - ${year}`;
+        return `${thisDay}, ${day} - ${myMonths[bulan]} - ${year}`;
 };
 
 export const jsonformat = (string) => {
-	return JSON.stringify(string, null, 2);
+        return JSON.stringify(string, null, 2);
 };
 
+// NOTE: bytesToSize is a duplicate of formatSize (below). Consider consolidating.
+// formatSize supports up to TB, bytesToSize supports up to YB with configurable decimals.
 export const bytesToSize = (bytes, decimals = 2) => {
-	if (bytes === 0) {
-		return "0 Bytes";
-	}
+        if (bytes === 0) {
+                return "0 Bytes";
+        }
 
-	const k = 1024;
-	const dm = decimals < 0 ? 0 : decimals;
-	const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-	const i = Math.floor(Math.log(bytes) / Math.log(k));
+        const k = 1024;
+        const dm = decimals < 0 ? 0 : decimals;
+        const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
 
-	return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
 };
 
 export function escapeRegExp(string) {
-	return string.replace(/[.*=+:\-?^${}()|[\]\\]|\s/g, "\\$&");
+        return string.replace(/[.*=+:\-?^${}()|[\]\\]|\s/g, "\\$&");
 }
 
 export function getEmojiRegex() {
-	return /(?:[\u2700-\u27bf]|(?:\ud83c[\udde6-\uddff]){2}|[\ud800-\udbff][\udc00-\udfff]|[\u0023-\u0039]\ufe0f?\u20e3|\u3299|\u3297|\u303d|\u3030|\u24c2|\ud83c[\udd70-\udd71]|\ud83c[\udd7e-\udd7f]|\ud83c\udd8e|\ud83c[\udd91-\udd9a]|\ud83c[\udde6-\uddff]|\ud83c[\ude01-\ude02]|\ud83c\ude1a|\ud83c\ude2f|\ud83c[\ude32-\ude3a]|\ud83c[\ude50-\ude51]|\u203c|\u2049|[\u25aa-\u25ab]|\u25b6|\u25c0|[\u25fb-\u25fe]|\u00a9|\u00ae|\u2122|\u2139|\ud83c\udc04|[\u2600-\u26ff]|\u2b05|\u2b06|\u2b07|\u2b1b|\u2b1c|\u2b50|\u2b55|\u231a|\u231b|\u2328|\u23cf|[\u23e9-\u23f3]|[\u23f8-\u23fa]|\ud83c\udccf|\u2934|\u2935|[\u2190-\u21ff])/g;
+        return /(?:[\u2700-\u27bf]|(?:\ud83c[\udde6-\uddff]){2}|[\ud800-\udbff][\udc00-\udfff]|[\u0023-\u0039]\ufe0f?\u20e3|\u3299|\u3297|\u303d|\u3030|\u24c2|\ud83c[\udd70-\udd71]|\ud83c[\udd7e-\udd7f]|\ud83c\udd8e|\ud83c[\udd91-\udd9a]|\ud83c[\udde6-\uddff]|\ud83c[\ude01-\ude02]|\ud83c\ude1a|\ud83c\ude2f|\ud83c[\ude32-\ude3a]|\ud83c[\ude50-\ude51]|\u203c|\u2049|[\u25aa-\u25ab]|\u25b6|\u25c0|[\u25fb-\u25fe]|\u00a9|\u00ae|\u2122|\u2139|\ud83c\udc04|[\u2600-\u26ff]|\u2b05|\u2b06|\u2b07|\u2b1b|\u2b1c|\u2b50|\u2b55|\u231a|\u231b|\u2328|\u23cf|[\u23e9-\u23f3]|[\u23f8-\u23fa]|\ud83c\udccf|\u2934|\u2935|[\u2190-\u21ff])/g;
 }
 
 /**
@@ -298,12 +313,12 @@ export function getEmojiRegex() {
  * @returns {string} The formatted time string.
  */
 export function msToTime(ms) {
-	if (!ms || typeof ms !== "number") {
-		return "N/A";
-	}
-	const minutes = Math.floor(ms / 60000);
-	const seconds = ((ms % 60000) / 1000).toFixed(0);
-	return minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
+        if (!ms || typeof ms !== "number") {
+                return "N/A";
+        }
+        const minutes = Math.floor(ms / 60000);
+        const seconds = ((ms % 60000) / 1000).toFixed(0);
+        return minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
 }
 
 /**
@@ -312,7 +327,7 @@ export function msToTime(ms) {
  * @returns {Promise<void>}
  */
 export function delay(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+        return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -321,15 +336,15 @@ export function delay(ms) {
  * @returns {{promise: Promise<void>, cancel: Function}}
  */
 export function cancellableDelay(ms) {
-	let timeoutId;
-	const promise = new Promise((resolve) => {
-		timeoutId = setTimeout(resolve, ms);
-	});
+        let timeoutId;
+        const promise = new Promise((resolve) => {
+                timeoutId = setTimeout(resolve, ms);
+        });
 
-	return {
-		promise,
-		cancel: () => clearTimeout(timeoutId),
-	};
+        return {
+                promise,
+                cancel: () => clearTimeout(timeoutId),
+        };
 }
 
 /**
@@ -340,11 +355,11 @@ export function cancellableDelay(ms) {
  * @returns {Promise<void>}
  */
 export function exponentialBackoff(attempt, baseDelay = 100, maxDelay = 10000) {
-	const delayMs = Math.min(
-		maxDelay,
-		Math.pow(2, attempt) * baseDelay + Math.random() * baseDelay
-	);
-	return delay(delayMs);
+        const delayMs = Math.min(
+                maxDelay,
+                Math.pow(2, attempt) * baseDelay + Math.random() * baseDelay
+        );
+        return delay(delayMs);
 }
 
 /**
@@ -354,19 +369,19 @@ export function exponentialBackoff(attempt, baseDelay = 100, maxDelay = 10000) {
  * @returns {Promise<void>}
  */
 export function delayWithProgress(ms, callback) {
-	return new Promise((resolve) => {
-		const start = Date.now();
-		const interval = setInterval(() => {
-			const elapsed = Date.now() - start;
-			const progress = Math.min(100, Math.floor((elapsed / ms) * 100));
-			callback(progress);
+        return new Promise((resolve) => {
+                const start = Date.now();
+                const interval = setInterval(() => {
+                        const elapsed = Date.now() - start;
+                        const progress = Math.min(100, Math.floor((elapsed / ms) * 100));
+                        callback(progress);
 
-			if (elapsed >= ms) {
-				clearInterval(interval);
-				resolve();
-			}
-		}, 100);
-	});
+                        if (elapsed >= ms) {
+                                clearInterval(interval);
+                                resolve();
+                        }
+                }, 100);
+        });
 }
 
 /**
@@ -375,23 +390,23 @@ export function delayWithProgress(ms, callback) {
  * @returns {string} Formatted datetime string
  */
 export function toDateTime(date = new Date()) {
-	if (!(date instanceof Date)) {
-		date = new Date(date);
-	}
-	if (isNaN(date)) {
-		throw new Error("Invalid date input to toDateTime()");
-	}
+        if (!(date instanceof Date)) {
+                date = new Date(date);
+        }
+        if (isNaN(date)) {
+                throw new Error("Invalid date input to toDateTime()");
+        }
 
-	const offset = -date.getTimezoneOffset();
-	const sign = offset >= 0 ? "+" : "-";
-	const absOffset = Math.abs(offset);
-	const h = String(Math.floor(absOffset / 60)).padStart(2, "0");
-	const m = String(absOffset % 60).padStart(2, "0");
-	const tz = `${sign}${h}:${m}`;
+        const offset = -date.getTimezoneOffset();
+        const sign = offset >= 0 ? "+" : "-";
+        const absOffset = Math.abs(offset);
+        const h = String(Math.floor(absOffset / 60)).padStart(2, "0");
+        const m = String(absOffset % 60).padStart(2, "0");
+        const tz = `${sign}${h}:${m}`;
 
-	return (
-		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ` +
-		`${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")} ` +
-		`(UTC${tz})`
-	);
+        return (
+                `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ` +
+                `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")} ` +
+                `(UTC${tz})`
+        );
 }

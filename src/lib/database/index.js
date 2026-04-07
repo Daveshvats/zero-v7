@@ -4,8 +4,9 @@ const usePostgres = process.env.USE_POSTGRES === "true" || process.env.DATABASE_
 const useMongo = process.env.USE_MONGO === "true";
 const useLocal = !usePostgres && !useMongo;
 
-let SettingsModel, UserModel, GroupModel, SessionModel, CommandModel, AITaskModel, DeadLetterModel, PermissionModel, MigrationModel;
+let SettingsModel, UserModel, GroupModel, SessionModel, CommandModel, AITaskModel, DeadLetterModel, PermissionModel, MigrationModel, VoiceModel;
 let dbType = "local";
+let localDB = null;
 
 async function initDatabase() {
         if (usePostgres) {
@@ -22,6 +23,7 @@ async function initDatabase() {
                         DeadLetterModel = postgres.DeadLetterModel;
                         PermissionModel = postgres.PermissionModel;
                         MigrationModel = postgres.MigrationModel;
+                        VoiceModel = postgres.VoiceModel;
                         dbType = "postgresql";
                         
                         print.info("Database: PostgreSQL initialized");
@@ -46,7 +48,7 @@ async function initDatabase() {
                 }
         }
 
-        const localDB = (await import("#lib/database/local")).default;
+        localDB = (await import("#lib/database/local")).default;
 
         SettingsModel = {
                 async getSettings() {
@@ -56,13 +58,13 @@ async function initDatabase() {
                 async setSettings(data) {
                         await localDB.initialize();
                         localDB.settings.set("bot", data);
-                        localDB.save();
+                        localDB.markDirty();
                 },
                 async updateSettings(update) {
                         await localDB.initialize();
                         const current = localDB.settings.get("bot") || {};
                         localDB.settings.set("bot", { ...current, ...update });
-                        localDB.save();
+                        localDB.markDirty();
                 },
         };
 
@@ -82,7 +84,7 @@ async function initDatabase() {
                         await localDB.initialize();
                         const existing = localDB.users.get(id) || {};
                         localDB.users.set(id, { ...existing, ...data });
-                        localDB.save();
+                        localDB.markDirty();
                 },
                 async setName(id, name) {
                         await this.setUser(id, { name });
@@ -114,7 +116,7 @@ async function initDatabase() {
                         await localDB.initialize();
                         const existing = localDB.groups.get(id) || {};
                         localDB.groups.set(id, { ...existing, ...data });
-                        localDB.save();
+                        localDB.markDirty();
                 },
                 async setName(id, name) {
                         await this.setGroup(id, { name });
@@ -181,6 +183,13 @@ async function initDatabase() {
                 async getCurrentVersion() { return null; },
         };
 
+        VoiceModel = {
+                async saveClone() { return null; },
+                async getClone() { return null; },
+                async getGroupClones() { return []; },
+                async deleteClone() { return false; },
+        };
+
         dbType = "local";
         print.info("Database: Local JSON initialized");
 }
@@ -189,4 +198,8 @@ export function getDatabaseType() {
         return dbType;
 }
 
-export { initDatabase, SettingsModel, UserModel, GroupModel, SessionModel, CommandModel, AITaskModel, DeadLetterModel, PermissionModel, MigrationModel };
+export function invalidatePermissionCache() {
+        // Hook for external cache invalidation if needed
+}
+
+export { initDatabase, SettingsModel, UserModel, GroupModel, SessionModel, CommandModel, AITaskModel, DeadLetterModel, PermissionModel, MigrationModel, VoiceModel };

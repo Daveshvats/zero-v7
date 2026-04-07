@@ -1,6 +1,7 @@
-import axios from "axios";
+import itsrose from "#lib/itsrose";
+import { submitPollAndSend } from "#lib/ai-helper";
 
-const STYLES_LIST = [
+const V1_STYLES = [
     "animal_fest", "old", "doll", "metal", "8bit", "city", "blazing_torch",
     "clay", "realism", "simulife", "sketch", "zombie", "oil_stick", "balloon",
     "pipe_craft", "crystal", "felt", "jade", "pink_girl", "vivid", "eastern",
@@ -16,108 +17,118 @@ const STYLES_LIST = [
     "game_lol", "game_ps2", "game_gta", "game_sim", "game_lr", "game_dress_up",
     "game_persona", "game_stardew_valley", "game_undawn", "game_lineage",
     "game_fantasy", "k_comic", "minecraft", "card_game", "kartun_dress_up",
-    "cyberpunk", "dora"
+    "cyberpunk", "dora",
 ];
 
 export default {
     name: "different-me",
-    description: "AI Image Style Changer",
+    description: "AI Image Style Changer (V1 & V2).",
     command: ["different-me", "diffme", "differentme"],
-    usage: "$prefix$command <style>",
+    usage: "$prefix$command [--v2] <style> (reply to image)\n$prefix$command --fetch [category_id]",
     category: "image",
     permissions: "all",
     limit: true,
     cooldown: 5,
 
-    async execute(m, { api }) {
-        const apiKey = "sk_PNcLyV1b7EU6lGCMrOMPJBRyHPcHcojdHc-INT1qsrw";
-        
-        // We use m.args if available, otherwise we split m.text manually
-        // This ensures the bot sees the text even if m.text is formatted strangely
+    async execute(m) {
         const args = m.text ? m.text.trim().split(/\s+/) : [];
-        const input = args[0] ? args[0].toLowerCase() : null;
+        const rawText = (m.text || "").trim();
 
-        // --- 1. IF NO INPUT: SHOW STYLES ---
-        if (!input) {
-            let msg = "*🎭 AVAILABLE STYLES*\n\n";
-            msg += STYLES_LIST.map(s => `• ${s}`).join("\n");
-            msg += `\n\n*How to use:*\nReply to an image with: \`.diffme ${STYLES_LIST[0]}\``;
+        // --- FETCH STYLES FROM API ---
+        if (rawText.includes("--fetch")) {
+            const isV2 = rawText.includes("--v2");
+            const catId = args.find(a => a && !a.startsWith("--") && a !== "fetch");
+            const endpoint = isV2 ? "/different_me/get_styles_v2" : "/different_me/get_styles";
+
+            try {
+                await m.reply(`⌛ Fetching ${isV2 ? "V2" : "V1"} styles from API...`);
+
+                const params = {};
+                if (catId && isV2) params.category_id = catId;
+
+                const res = await itsrose.get(endpoint, {
+                    params,
+                }).catch(e => e.response);
+
+                if (!res?.data?.ok) {
+                    return m.reply(`❌ API Error: ${res?.data?.message || "Server error"}`);
+                }
+
+                const styles = res.data.data?.styles || [];
+                if (!styles.length) return m.reply("🔍 No styles found.");
+
+                let msg = `🎭 *AVAILABLE ${isV2 ? "V2" : "V1"} STYLES* (${styles.length})\n\n`;
+                for (const style of styles) {
+                    const id = style.style_id || style.id || style;
+                    const name = style.name || style.style_name || id;
+                    msg += `• ${id}${name !== id ? ` (${name})` : ""}\n`;
+                }
+                msg += `\n*Usage:*\nReply to an image with: \`.diffme${isV2 ? " --v2" : ""} <style_id>\``;
+                return m.reply(msg);
+            } catch (e) {
+                console.error("FETCH STYLES ERROR:", e);
+                return m.reply(`❌ System Error: ${e.message}`);
+            }
+        }
+
+        // Determine V1 vs V2
+        const isV2 = rawText.includes("--v2");
+        const styleInput = args.filter(a => !a.startsWith("--")).join(" ").toLowerCase() || null;
+
+        // --- SHOW STYLES IF NO INPUT ---
+        if (!styleInput) {
+            const styles = isV2 ? "(fetch with --fetch)" : V1_STYLES;
+            let msg = `🎭 *AVAILABLE ${isV2 ? "V2" : "V1"} STYLES*\n\n`;
+            if (Array.isArray(styles)) {
+                msg += styles.map(s => `• ${s}`).join("\n");
+            } else {
+                msg += `${styles}\nUse \`.diffme --v2 --fetch\` to fetch V2 styles from API.`;
+            }
+            msg += `\n\n*How to use:*\nReply to an image with: \`.diffme${isV2 ? " --v2" : ""} ${V1_STYLES[0]}\``;
+            msg += `\n\n*Tip:* Use \`--v2\` for V2 styles, \`--fetch\` to load from API`;
             return m.reply(msg);
         }
 
-        // --- 2. VALIDATE STYLE ---
-        if (!STYLES_LIST.includes(input)) {
-            return m.reply(`❌ Style *${input}* not found. Send \`.diffme\` alone to see the list.`);
+        // Validate style (only for V1 hardcoded list; V2 styles are not validated locally)
+        if (!isV2 && !V1_STYLES.includes(styleInput)) {
+            return m.reply(`❌ Style *${styleInput}* not found. Send \`.diffme\` alone to see the list.`);
         }
 
-        // --- 3. MEDIA CHECK ---
+        // --- MEDIA CHECK ---
         const quoted = m.quoted ? m.quoted : m;
-        // Check for image in the message or the quoted message
-        const isImage = m.type === 'imageMessage' || (m.quoted && m.quoted.type === 'imageMessage') || /image/i.test(quoted.mime || quoted.mimetype || "");
+        const isImage =
+            m.type === "imageMessage" ||
+            (m.quoted && m.quoted.type === "imageMessage") ||
+            /image/i.test(quoted.mime || quoted.mimetype || "");
 
         if (!isImage) {
             return m.reply("📸 Please reply to an image or send an image with the command.");
         }
 
         try {
-            // We tell the user we are working
-            await m.reply(`⌛ Applying style *${input}*...`);
+            await m.reply(`⌛ Applying ${isV2 ? "V2 " : ""}style *${styleInput}*...`);
 
             const buffer = await quoted.download();
             if (!buffer) return m.reply("❌ Failed to download image.");
 
-            // --- 4. SUBMIT TO API ---
-            const submit = await axios.post("https://api.itsrose.net/image/different_me", {
-                init_image: buffer.toString("base64"),
-                style_id: input,
-                sync: false,
-            }, {
-                headers: { 
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${apiKey}` 
-                }
-            }).catch(e => e.response); // Catch axios errors to see what API says
+            // Submit to correct endpoint
+            const endpoint = isV2 ? "/different_me/transform_v2" : "/different_me/transform";
+            const submit = await itsrose.post(
+                endpoint,
+                { init_image: buffer.toString("base64"), style_id: styleInput, sync: false }
+            ).catch(e => e.response);
 
-            if (!submit?.data?.status) {
+            if (!submit?.data?.ok) {
                 return m.reply(`❌ API Error: ${submit?.data?.message || "Server Unreachable"}`);
             }
 
-            const taskId = submit.data.result.task_id;
-
-            // --- 5. POLLING LOOP ---
-            let attempts = 0;
-            while (attempts < 35) {
-                await new Promise(r => setTimeout(r, 4000)); // Wait 4s
-                
-                const check = await axios.get("https://api.itsrose.net/image/get_task", {
-                    params: { task_id: taskId },
-                    headers: { Authorization: `Bearer ${apiKey}` }
-                });
-
-                if (check.data?.status && check.data?.result) {
-                    const res = check.data.result;
-                    
-                    if (res.status === "completed") {
-                        const images = res.images || [];
-                        // Send all images at once
-                        for (const url of images) {
-                            await m.reply({ image: { url }, caption: `✅ Style: ${input}` });
-                        }
-                        return;
-                    }
-
-                    if (res.status === "failed") {
-                        return m.reply("❌ The AI failed to process this specific image.");
-                    }
-                }
-                attempts++;
-            }
-
-            return m.reply("⏰ Request timed out. The image is taking too long.");
-
+            return submitPollAndSend(m, submit.data.data, `✅ ${isV2 ? "V2 " : ""}Style: ${styleInput}`, {
+                pollPath: '/different_me/get_task',
+                label: 'Style Transfer',
+            });
         } catch (e) {
-            console.error("DEBUG ERROR:", e);
+            console.error("DIFFME ERROR:", e);
             return m.reply(`❌ System Error: ${e.message}`);
         }
-    }
+    },
 };

@@ -1,10 +1,18 @@
 import fetch from "node-fetch";
-import Sticker from "#lib/sticker"; // Using your sticker library
+import Sticker from "#lib/sticker";
+
+const ACTIONS = {
+    slap: { path: "slap", verb: "slaped" },
+    kiss: { path: "kiss", verb: "kissed" },
+    yeet: { path: "yeet", verb: "yeeted" },
+    kill: { path: "kill", verb: "killed" },
+    pat: { path: "pat", verb: "pated" },
+};
 
 export default {
-    name: "slap",
-    description: "slap someone with a reaction sticker.",
-    command: ["slap"],
+    name: "reactions",
+    description: "React to someone with a fun sticker (slap, kiss, yeet, kill, pat).",
+    command: Object.keys(ACTIONS),
     permissions: "all",
     hidden: false,
     failed: "Failed to %command: %error",
@@ -20,41 +28,37 @@ export default {
     owner: false,
 
     async execute(m, { sock }) {
-        // 1. Target Detection
+        const action = ACTIONS[m.command];
+        if (!action) return m.reply("Unknown reaction command.");
+
         const user = m?.quoted?.sender || m.mentions[0];
         if (!user) return m.reply("Reply or tag a user!");
 
         try {
-            // 2. Fetch Media from waifu.pics
-            const res = await fetch(`https://api.waifu.pics/sfw/slap`);
+            const res = await fetch(`https://api.waifu.pics/sfw/${action.path}`);
             if (!res.ok) throw new Error("API Error");
             const json = await res.json();
 
-            // 3. Download the media into a Buffer
             const mediaRes = await fetch(json.url);
             const buffer = Buffer.from(await mediaRes.arrayBuffer());
 
-            // 4. Create Sticker using your technique
             const sticker = await Sticker.create(buffer, {
-                packname: "⛓️Zero⛓️", // Consistent with your brat command
+                packname: "⛓️Zero⛓️",
                 author: m.pushName,
                 emojis: "🗡️",
             });
 
-            // 5. Send Sticker
             await m.reply({ sticker });
 
-            // 6. Send Mention Text
-            const senderTag = `@${m.sender.split('@')[0]}`;
-            const targetTag = `@${user.split('@')[0]}`;
+            const senderTag = `@${m.sender.split("@")[0]}`;
+            const targetTag = `@${user.split("@")[0]}`;
             await m.reply({
-                text: `${senderTag} slaped ${targetTag}`,
-                mentions: [m.sender, user]
+                text: `${senderTag} ${action.verb} ${targetTag}`,
+                mentions: [m.sender, user],
             });
-
         } catch (e) {
-            console.error("[slap ERROR]:", e);
+            console.error(`[${m.command} ERROR]:`, e);
             m.reply(`❌ Failed to create sticker: ${e.message}`);
         }
-    }
+    },
 };

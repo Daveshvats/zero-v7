@@ -1,9 +1,24 @@
-import { exec } from "child_process";
-import { readFileSync, unlinkSync } from "fs";
+import { spawn } from "child_process";
+import { readFile, unlink } from "node:fs/promises";
 import { join } from "path";
-import util from "util";
 
-const execPromise = util.promisify(exec);
+/**
+ * Spawn yt-dlp with the given args and return a promise that resolves on exit code 0.
+ * @param {string[]} args
+ * @returns {Promise<void>}
+ */
+function spawnYtDlp(args) {
+        return new Promise((resolve, reject) => {
+                const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
+                let stderr = "";
+                proc.stderr.on("data", (chunk) => { stderr += chunk; });
+                proc.on("error", reject);
+                proc.on("close", (code) => {
+                        if (code === 0) return resolve();
+                        reject(new Error(`yt-dlp exited with code ${code}: ${stderr.trim() || "unknown error"}`));
+                });
+        });
+}
 
 /**
  * Download YouTube audio/video with yt-dlp.
@@ -22,13 +37,13 @@ export async function downloadYt(url, opts = {}) {
                                 "best[ext=mp4]",
                                 "best[vcodec!=none][acodec!=none][height<=360]",
                                 "best",
-                ]
+                        ]
                 : [
                                 "bestaudio[ext=m4a]",
                                 "bestaudio[ext=mp3]",
                                 "bestaudio[ext=wav]",
                                 "bestaudio",
-                ];
+                        ];
 
         const outputExt = video ? "mp4" : "m4a";
         let lastError = null;
@@ -47,19 +62,18 @@ export async function downloadYt(url, opts = {}) {
                         ];
 
                         try {
-                                readFileSync(cookiesPath);
+                                await readFile(cookiesPath);
                                 args.unshift("--cookies", cookiesPath);
                         } catch {
                                 // cookies.txt not required
                         }
 
-                        const cmd = `yt-dlp ${args.map((a) => `"${a}"`).join(" ")}`;
-                        console.log("[yt-dlp cmd]", cmd);
+                        console.log("[yt-dlp cmd]", "yt-dlp", args.join(" "));
 
-                        await execPromise(cmd, { maxBuffer: 300 * 1024 * 1024 });
+                        await spawnYtDlp(args);
 
-                        const buffer = readFileSync(outFile);
-                        unlinkSync(outFile);
+                        const buffer = await readFile(outFile);
+                        await unlink(outFile);
 
                         return {
                                 buffer,

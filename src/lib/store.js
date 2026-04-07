@@ -49,13 +49,10 @@ class Local {
                         messages: join(process.cwd(), `${sessionName}/messages.json`),
                 };
                 this.saveInterval = null;
-                this.cleanupInterval = null;
                 /** @type {Object.<string, any>} */
                 this.contacts = {};
                 /** @type {Object.<string, any>} */
                 this.groupMetadata = {};
-                /** @type {Object.<string, any>} */
-                this.messages = {};
         }
 
         /**
@@ -84,24 +81,8 @@ class Local {
         }
 
         /**
-         * Cleans up old/expired messages from cache and trigger garbage collection.
-         */
-        cleanupMessages() {
-                const keysToDelete = [];
-                for (const key of messageCache.keys()) {
-                        const msg = messageCache.get(key);
-                        if (!msg) {
-                                keysToDelete.push(key);
-                        }
-                }
-                keysToDelete.forEach(key => messageCache.del(key));
-                if (global.gc && Math.random() < 0.25) {
-                        global.gc();
-                }
-        }
-
-        /**
          * Saves contacts and group metadata to JSON files.
+         * NodeCache already handles TTL expiry automatically — no manual cleanup needed.
          * @returns {Promise<void>}
          */
         async save() {
@@ -137,22 +118,15 @@ class Local {
         savePeriodically(interval = 30000) {
                 this.saveInterval && clearInterval(this.saveInterval);
                 this.saveInterval = setInterval(() => this.save(), interval);
-
-                this.cleanupInterval && clearInterval(this.cleanupInterval);
-                this.cleanupInterval = setInterval(
-                        () => this.cleanupMessages(),
-                        600000
-                );
+                if (this.saveInterval.unref) this.saveInterval.unref();
         }
 
         /**
-         * Stops periodic saving and cleanup.
+         * Stops periodic saving.
          */
         stopSaving() {
                 this.saveInterval && clearInterval(this.saveInterval);
-                this.cleanupInterval && clearInterval(this.cleanupInterval);
                 this.saveInterval = null;
-                this.cleanupInterval = null;
         }
 
         /**
@@ -204,10 +178,18 @@ class Local {
 
         /**
          * Sets group metadata for a given JID.
+         * Normalizes participants once on write so serialize doesn't need to re-normalize on every read.
          * @param {string} jid
          * @param {Object} metadata
          */
         setGroupMetadata(jid, metadata) {
+                if (metadata?.participants) {
+                        metadata.participants = metadata.participants.map((p) => ({
+                                ...p,
+                                jid: jidNormalizedUser(p.jid),
+                                phoneNumber: jidNormalizedUser(p.phoneNumber),
+                        }));
+                }
                 this.groupMetadata[jidNormalizedUser(jid)] = metadata;
         }
 
@@ -252,7 +234,6 @@ class Mongo {
                 /** @type {string} */
                 this.sessionName = sessionName;
                 this.saveInterval = null;
-                this.cleanupInterval = null;
                 this.client = null;
                 this.db = null;
                 this.coll = {};
@@ -346,29 +327,14 @@ class Mongo {
         }
 
         /**
-         * Cleans up old/expired messages from cache and trigger garbage collection.
-         */
-        cleanupMessages() {
-                const keysToDelete = [];
-                for (const key of messageCache.keys()) {
-                        const msg = messageCache.get(key);
-                        if (!msg) {
-                                keysToDelete.push(key);
-                        }
-                }
-                keysToDelete.forEach(key => messageCache.del(key));
-                if (global.gc && Math.random() < 0.25) {
-                        global.gc();
-                }
-        }
-
-        /**
          * Enables periodic saving.
+         * NodeCache handles TTL expiry automatically — no manual cleanup needed.
          * @param {number} [interval=30000] - Interval in ms.
          */
         savePeriodically(interval = 30000) {
                 this.saveInterval && clearInterval(this.saveInterval);
                 this.saveInterval = setInterval(() => this.save(), interval);
+                if (this.saveInterval.unref) this.saveInterval.unref();
         }
 
         /**
@@ -378,8 +344,9 @@ class Mongo {
                 this.saveInterval && clearInterval(this.saveInterval);
                 this.saveInterval = null;
                 if (this.client) {
-                        setTimeout(() => this.client.close(), 5000);
+                        const client = this.client;
                         this.client = null;
+                        setTimeout(() => client.close().catch(() => {}), 5000);
                 }
         }
 
@@ -444,7 +411,15 @@ class Mongo {
          * @param {Object} metadata
          */
         setGroupMetadata(jid, metadata) {
-                groupMetadataCache.set(jidNormalizedUser(jid), stripMongoId(metadata));
+                const normalized = stripMongoId(metadata);
+                if (normalized?.participants) {
+                        normalized.participants = normalized.participants.map((p) => ({
+                                ...p,
+                                jid: jidNormalizedUser(p.jid),
+                                phoneNumber: jidNormalizedUser(p.phoneNumber),
+                        }));
+                }
+                groupMetadataCache.set(jidNormalizedUser(jid), normalized);
         }
 
         /**

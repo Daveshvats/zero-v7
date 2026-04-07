@@ -10,205 +10,215 @@ import print from "#lib/print";
 import redis, { initRedis, isRedisConnected } from "#lib/redis/index";
 
 function centerText(text, width = 55) {
-	const pad = Math.max(0, Math.floor((width - text.length) / 2));
-	return " ".repeat(pad) + text;
+        const pad = Math.max(0, Math.floor((width - text.length) / 2));
+        return " ".repeat(pad) + text;
 }
 
 function art() {
-	return [
-		colorize(Colors.FgWhite, centerText("Katsumi by NatsumiWorld")),
-		colorize(
-			Colors.FgWhite,
-			"+====================================================+"
-		),
-		colorize(
-			Colors.FgWhite,
-			"|         ,-~~\\             ,-. <~)_   ,-==.     ;. .|"
-		),
-		colorize(
-			Colors.FgWhite,
-			"|          (   \\            | |  ( v~\\  (  (\\   ; |  |"
-		),
-		colorize(
-			Colors.FgWhite,
-			"|.-===-.,   |\\. \\   .-==-.  | '   \\_/'   |\\.\\\\  `.|  |"
-		),
-		colorize(
-			Colors.FgWhite,
-			"|\\.___.'   _]_]\\ \\ /______\\ |     /\\    _]_]\\ \\   |  |"
-		),
-		colorize(
-			Colors.FgWhite,
-			"+====================================================+"
-		),
-	].join("\n");
+        return [
+                colorize(Colors.FgWhite, centerText("Katsumi by NatsumiWorld")),
+                colorize(
+                        Colors.FgWhite,
+                        "+====================================================+"
+                ),
+                colorize(
+                        Colors.FgWhite,
+                        "|         ,-~~\\             ,-. <~)_   ,-==.     ;. .|"
+                ),
+                colorize(
+                        Colors.FgWhite,
+                        "|          (   \\            | |  ( v~\\  (  (\\   ; |  |"
+                ),
+                colorize(
+                        Colors.FgWhite,
+                        "|.-===-.,   |\\. \\   .-==-.  | '   \\_/'   |\\.\\\\  `.|  |"
+                ),
+                colorize(
+                        Colors.FgWhite,
+                        "|\\.___.'   _]_]\\ \\ /______\\ |     /\\    _]_]\\ \\   |  |"
+                ),
+                colorize(
+                        Colors.FgWhite,
+                        "+====================================================+"
+                ),
+        ].join("\n");
 }
 
 async function animateStartup() {
-	const msg = "Starting Katsumi WhatsApp Bot";
-	for (let i = 0; i < 3; i++) {
-		process.stdout.write(
-			`\r${colorize(Colors.FgYellow, msg + ".".repeat(i + 1) + "   ")}`
-		);
-		await new Promise((res) => setTimeout(res, 400));
-	}
-	process.stdout.write("\r" + " ".repeat(msg.length + 3) + "\r");
+        const msg = "Starting Katsumi WhatsApp Bot";
+        for (let i = 0; i < 3; i++) {
+                process.stdout.write(
+                        `\r${colorize(Colors.FgYellow, msg + ".".repeat(i + 1) + "   ")}`
+                );
+                await new Promise((res) => setTimeout(res, 400));
+        }
+        process.stdout.write("\r" + " ".repeat(msg.length + 3) + "\r");
 }
 
 async function main() {
-	try {
-		console.log(art());
+        try {
+                // Signal noise suppression is handled by src/lib/signal-patch.js (loaded via --import).
+                // That preload script patches console/stdout/stderr BEFORE any ES module imports,
+                // so Baileys captures the patched versions at import time.
 
-		validateEnvironment();
+                console.log(art());
 
-		gracefulShutdown.setup();
+                validateEnvironment();
 
-		await animateStartup();
+                gracefulShutdown.setup();
 
-		await initDatabase();
-		await initRedis();
+                await animateStartup();
 
-		print.info(`Database: ${getDatabaseType()} | Redis: ${isRedisConnected() ? "connected" : "memory fallback"}`);
+                await initDatabase();
+                await initRedis();
 
-		const bot = new Connect();
+                print.info(`Database: ${getDatabaseType()} | Redis: ${isRedisConnected() ? "connected" : "memory fallback"}`);
 
-		gracefulShutdown.register(
-			"pluginManager",
-			async () => {
-				print.info("Stopping periodic tasks...");
-				bot.pluginManager.stopAllPeriodicTasks();
-			},
-			1
-		);
+                const bot = new Connect();
 
-		gracefulShutdown.register(
-			"store",
-			async () => {
-				print.info("Saving store data...");
-				try {
-					if (bot.store) {
-						bot.store.stopSaving();
-						if (typeof bot.store.save === "function") {
-							await bot.store.save();
-						}
-					}
-				} catch (e) {
-					print.debug("Store save skipped: " + e.message);
-				}
-			},
-			2
-		);
+                gracefulShutdown.register(
+                        "pluginManager",
+                        async () => {
+                                print.info("Stopping periodic tasks...");
+                                bot.pluginManager.stopAllPeriodicTasks();
+                        },
+                        1
+                );
 
-		gracefulShutdown.register(
-			"socket",
-			async () => {
-				print.info("Closing WhatsApp connection...");
-				try {
-					if (bot.sock && bot.sock.ws) {
-						bot.sock.ws.close();
-					}
-				} catch (e) {
-					print.debug("Socket close skipped: " + e.message);
-				}
-			},
-			3
-		);
+                gracefulShutdown.register(
+                        "store",
+                        async () => {
+                                print.info("Saving store data...");
+                                try {
+                                        if (bot.store) {
+                                                bot.store.stopSaving();
+                                                if (typeof bot.store.save === "function") {
+                                                        await bot.store.save();
+                                                }
+                                        }
+                                } catch (e) {
+                                        print.debug("Store save skipped: " + e.message);
+                                }
+                        },
+                        2
+                );
 
-		gracefulShutdown.register(
-			"database",
-			async () => {
-				print.info("Closing database connections...");
-				try {
-					const { closePostgres } = await import("#lib/database/postgres");
-					await closePostgres();
-				} catch (e) {
-					print.debug("Database close skipped: " + e.message);
-				}
-			},
-			4
-		);
+                gracefulShutdown.register(
+                        "socket",
+                        async () => {
+                                print.info("Closing WhatsApp connection...");
+                                try {
+                                        if (bot.sock && bot.sock.ws) {
+                                                bot.sock.ws.close();
+                                        }
+                                } catch (e) {
+                                        print.debug("Socket close skipped: " + e.message);
+                                }
+                        },
+                        3
+                );
 
-		gracefulShutdown.registerImmediate(() => {
-			healthMonitor.stopPeriodicChecks();
-		});
+                gracefulShutdown.register(
+                        "database",
+                        async () => {
+                                print.info("Closing database connections...");
+                                try {
+                                        const { closePostgres } = await import("#lib/database/postgres");
+                                        await closePostgres();
+                                } catch (e) {
+                                        print.debug("Database close skipped: " + e.message);
+                                }
+                                try {
+                                        const { closePostgresAuth } = await import("#lib/auth/postgres");
+                                        await closePostgresAuth();
+                                } catch (e) {
+                                        print.debug("Auth pool close skipped: " + e.message);
+                                }
+                        },
+                        4
+                );
 
-		gracefulShutdown.register(
-			"metrics",
-			async () => {
-				print.info("Final metrics report:");
-				metricsCollector.printSummary();
-			},
-			5
-		);
+                gracefulShutdown.registerImmediate(() => {
+                        healthMonitor.stopPeriodicChecks();
+                });
 
-		healthMonitor.registerComponent("whatsapp", async () => {
-			const connected = bot.sock && bot.sock.user;
-			return {
-				healthy: !!connected,
-				details: {
-					connected: !!connected,
-					user: connected ? bot.sock.user.id : null,
-				},
-			};
-		});
+                gracefulShutdown.register(
+                        "metrics",
+                        async () => {
+                                print.info("Final metrics report:");
+                                metricsCollector.printSummary();
+                        },
+                        5
+                );
 
-		healthMonitor.registerComponent("plugins", async () => {
-			const pluginCount = bot.pluginManager.getPlugins().length;
-			return {
-				healthy: pluginCount > 0,
-				details: {
-					loadedPlugins: pluginCount,
-				},
-			};
-		});
+                healthMonitor.registerComponent("whatsapp", async () => {
+                        const connected = bot.sock && bot.sock.user;
+                        return {
+                                healthy: !!connected,
+                                details: {
+                                        connected: !!connected,
+                                        user: connected ? bot.sock.user.id : null,
+                                },
+                        };
+                });
 
-		healthMonitor.registerComponent("database", async () => {
-			const dbType = getDatabaseType();
-			return {
-				healthy: dbType !== "none",
-				details: {
-					type: dbType,
-				},
-			};
-		});
+                healthMonitor.registerComponent("plugins", async () => {
+                        const pluginCount = bot.pluginManager.getPlugins().length;
+                        return {
+                                healthy: pluginCount > 0,
+                                details: {
+                                        loadedPlugins: pluginCount,
+                                },
+                        };
+                });
 
-		healthMonitor.registerComponent("redis", async () => {
-			const connected = isRedisConnected();
-			return {
-				healthy: true,
-				details: {
-					connected,
-					mode: connected ? "upstash" : "memory",
-				},
-			};
-		});
+                healthMonitor.registerComponent("database", async () => {
+                        const dbType = getDatabaseType();
+                        return {
+                                healthy: dbType !== "none",
+                                details: {
+                                        type: dbType,
+                                },
+                        };
+                });
 
-		healthMonitor.on("critical", (event) => {
-			print.error(
-				`Critical health issue: ${event.component} - ${event.error} (${event.failures} failures)`
-			);
-		});
+                healthMonitor.registerComponent("redis", async () => {
+                        const connected = isRedisConnected();
+                        return {
+                                healthy: true,
+                                details: {
+                                        connected,
+                                        mode: connected ? "upstash" : "memory",
+                                },
+                        };
+                });
 
-		print.info("Bot started & periodic task scheduled!");
+                healthMonitor.on("critical", (event) => {
+                        print.error(
+                                `Critical health issue: ${event.component} - ${event.error} (${event.failures} failures)`
+                        );
+                });
 
-		await bot.start();
-		await autoLoadCloneBots();
+                print.info("Bot started & periodic task scheduled!");
 
-		healthMonitor.startPeriodicChecks(60000);
+                await bot.start();
+                await autoLoadCloneBots();
 
-		if (process.send) {
-			process.send("ready");
-		}
+                healthMonitor.startPeriodicChecks(60000);
 
-		print.info("Bot initialization complete");
+                if (process.send) {
+                        process.send("ready");
+                }
 
-		const report = await healthMonitor.checkAll();
-		print.debug(`Initial health check: ${healthMonitor.getOverallStatus()}`);
+                print.info("Bot initialization complete");
 
-	} catch (error) {
-		print.error(colorize(Colors.FgRed, "Failed to start WhatsApp Bot:"), error);
-		process.exit(1);
-	}
+                const report = await healthMonitor.checkAll();
+                print.debug(`Initial health check: ${healthMonitor.getOverallStatus()}`);
+
+        } catch (error) {
+                print.error(colorize(Colors.FgRed, "Failed to start WhatsApp Bot:"), error);
+                process.exit(1);
+        }
 }
 
 main();

@@ -1,4 +1,5 @@
-import axios from "axios";
+import itsrose from "#lib/itsrose";
+import { sendImage, sendAudio } from "#lib/media";
 
 export default {
     name: "sunio",
@@ -33,21 +34,13 @@ export default {
         await m.reply("🎵 Creating your music... this may take a moment.");
 
         try {
-            const apiKey = "sk_PNcLyV1b7EU6lGCMrOMPJBRyHPcHcojdHc-INT1qsrw"; 
-
             // 1. SUBMIT TASK
-            const submitResponse = await axios.post(
-                "https://api.itsrose.net/ai_song/submit_task",
+            const submitResponse = await itsrose.post(
+                "/ai_song/submit_task",
                 {
                     mode: "auto",
                     model: "v3.0",
                     prompt: input,
-                },
-                {
-                    headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${apiKey}`,
-                    },
                 }
             );
 
@@ -78,11 +71,10 @@ export default {
 
             while (attempts < maxAttempts) {
                 try {
-                    const checkResponse = await axios.get(
-                        `https://api.itsrose.net/ai_song/get_task`, 
+                    const checkResponse = await itsrose.get(
+                        "/ai_song/get_task",
                         {
                             params: { task_id: taskId },
-                            headers: { Authorization: `Bearer ${apiKey}` },
                         }
                     );
 
@@ -126,19 +118,12 @@ export default {
             }
 
             if (songData.cover_url) {
-                await m.reply({ 
-                    image: { url: songData.cover_url }, 
-                    caption: msg 
-                });
+                await sendImage(m, songData.cover_url, msg, { label: "Suno Cover" });
             } else {
                 await m.reply(msg);
             }
 
-            await m.reply({
-                audio: { url: songData.audio_url },
-                mimetype: "audio/mpeg",
-                ptt: false 
-            });
+            await sendAudio(m, songData.audio_url, { mimetype: "audio/mpeg" });
 
         } catch (e) {
             console.error("Main Error:", e);

@@ -1,7 +1,7 @@
 import { exec, spawn } from "child_process";
 import { fileTypeFromBuffer } from "file-type";
 import ffmpeg from "fluent-ffmpeg";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { access, readFile, unlink, writeFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
@@ -79,25 +79,18 @@ export async function convert(mediaBuffer, args, format = null) {
                         .input(bufferToStream(mediaBuffer))
                         .addOutputOptions(args)
                         .format(format)
-                        .on("end", () => {
+                        .on("end", async () => {
                                 try {
-                                        if (existsSync(tempPath)) {
-                                                const buffer = readFileSync(tempPath);
-                                                unlinkSync(tempPath);
-                                                resolve(buffer);
-                                        } else {
-                                                reject(new Error("Output file not created"));
-                                        }
+                                        try { await access(tempPath); } catch { return reject(new Error("Output file not created")); }
+                                        const buffer = await readFile(tempPath);
+                                        await unlink(tempPath);
+                                        resolve(buffer);
                                 } catch (err) {
                                         reject(err);
                                 }
                         })
-                        .on("error", (err) => {
-                                try {
-                                        if (existsSync(tempPath)) {
-                                                unlinkSync(tempPath);
-                                        }
-                                } catch {}
+                        .on("error", async (err) => {
+                                try { await access(tempPath); await unlink(tempPath); } catch {}
                                 reject(err);
                         })
                         .on("stderr", (stderrLine) => {
@@ -149,32 +142,49 @@ export async function webpToVideo(buffer) {
         const gif = join(".", `${Date.now()}.gif`);
         const output = join(".", `${Date.now()}.mp4`);
 
-        writeFileSync(input, buffer);
+        await writeFile(input, buffer);
 
         return new Promise((resolve, reject) => {
-                exec(`convert ${input} ${gif}`, (err) => {
-                        if (err) {
-                                unlinkSync(input);
-                                return reject(err);
+                const convert = spawn("convert", [input, gif]);
+                convert.on("error", async (err) => {
+                        try { await unlink(input); } catch {}
+                        return reject(err);
+                });
+                convert.on("close", async (code) => {
+                        if (code !== 0) {
+                                try { await unlink(input); } catch {}
+                                return reject(new Error(`convert exited with code ${code}`));
                         }
 
-                        exec(
-                                `ffmpeg -i ${gif} -pix_fmt yuv420p -c:v libx264 -movflags +faststart -filter:v crop='floor(in_w/2)*2:floor(in_h/2)*2' ${output}`,
-                                (err) => {
-                                        if (err) {
-                                                unlinkSync(input);
-                                                unlinkSync(gif);
-                                                return reject(err);
-                                        }
+                        const ffmpeg = spawn("ffmpeg", [
+                                "-i", gif,
+                                "-pix_fmt", "yuv420p",
+                                "-c:v", "libx264",
+                                "-movflags", "+faststart",
+                                "-filter:v", "crop='floor(in_w/2)*2:floor(in_h/2)*2'",
+                                output,
+                        ]);
 
-                                        let buff = readFileSync(output);
-                                        resolve(buff);
+                        ffmpeg.on("error", async (err) => {
+                                try { await unlink(input); } catch {}
+                                try { await unlink(gif); } catch {}
+                                return reject(err);
+                        });
 
-                                        unlinkSync(input);
-                                        unlinkSync(gif);
-                                        unlinkSync(output);
+                        ffmpeg.on("close", async (code) => {
+                                if (code !== 0) {
+                                        try { await unlink(input); } catch {}
+                                        try { await unlink(gif); } catch {}
+                                        return reject(new Error(`ffmpeg exited with code ${code}`));
                                 }
-                        );
+
+                                const buff = await readFile(output);
+                                resolve(buff);
+
+                                try { await unlink(input); } catch {}
+                                try { await unlink(gif); } catch {}
+                                try { await unlink(output); } catch {}
+                        });
                 });
         });
 }
