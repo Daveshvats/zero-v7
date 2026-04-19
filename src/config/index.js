@@ -4,7 +4,7 @@
  */
 export const MYSQL_CONFIG = {
         host: process.env.MYSQL_HOST,
-        port: parseInt(process.env.MYSQL_PORT, 10),
+        port: parseInt(process.env.MYSQL_PORT || "3306", 10),
         user: process.env.MYSQL_USER,
         password: process.env.MYSQL_PASSWORD,
         database: process.env.MYSQL_DATABASE,
@@ -17,18 +17,28 @@ export const MYSQL_CONFIG = {
  */
 export const BOT_CONFIG = {
         sessionName: process.env.BOT_SESSION_NAME || "sessions",
-        prefixes: process.env.BOT_PREFIXES
-                ? process.env.BOT_PREFIXES.includes("[")
-                        ? JSON.parse(process.env.BOT_PREFIXES.replace(/'/g, '"'))
-                        : process.env.BOT_PREFIXES.split(",")
-                                        .map((p) => p.trim())
-                                        .filter(Boolean)
-                : [],
-        ownerJids: process.env.OWNER_JIDS
-                ? process.env.OWNER_JIDS.includes("[")
-                        ? JSON.parse(process.env.OWNER_JIDS.replace(/'/g, '"'))
-                        : process.env.OWNER_JIDS.split(",")
-                : [],
+        prefixes: (() => {
+                if (!process.env.BOT_PREFIXES) return [];
+                try {
+                        return process.env.BOT_PREFIXES.includes("[")
+                                ? JSON.parse(process.env.BOT_PREFIXES.replace(/'/g, '"'))
+                                : process.env.BOT_PREFIXES.split(",").map((p) => p.trim()).filter(Boolean);
+                } catch {
+                        // FIX: Fallback to simple split if JSON.parse fails (malformed JSON)
+                        return process.env.BOT_PREFIXES.split(",").map((p) => p.trim()).filter(Boolean);
+                }
+        })(),
+        ownerJids: (() => {
+                if (!process.env.OWNER_JIDS) return [];
+                try {
+                        return process.env.OWNER_JIDS.includes("[")
+                                ? JSON.parse(process.env.OWNER_JIDS.replace(/'/g, '"'))
+                                : process.env.OWNER_JIDS.split(",");
+                } catch {
+                        // FIX: Fallback to simple split if JSON.parse fails
+                        return process.env.OWNER_JIDS.split(",").filter(Boolean);
+                }
+        })(),
         allowExperimental: process.env.BOT_ALLOW_EXPERIMENTAL !== "false",
 };
 

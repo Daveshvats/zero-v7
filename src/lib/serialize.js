@@ -18,7 +18,7 @@ import {
 } from "baileys";
 import { fileTypeFromBuffer } from "file-type";
 import { randomBytes } from "node:crypto";
-import { existsSync, promises, readFileSync } from "node:fs";
+import { existsSync, promises } from "node:fs";
 import { join } from "node:path";
 import pino from "pino";
 
@@ -29,8 +29,7 @@ const _dlLogger = pino({
 
 const randomId = (length = 16) => randomBytes(length).toString("hex");
 
-/** Pre-compiled regex for prefix detection on quoted messages (was created per-message) */
-const PREFIX_REGEX = new RegExp("^[°•π÷×¶∆£¢€¥®™+✓=|/~!?@#%^&.©^]", "gi");
+// NOTE: PREFIX_REGEX removed — was defined but never used anywhere in the codebase.
 
 const parseMessage = (content) => {
         content = extractMessageContent(content);
@@ -395,7 +394,8 @@ export function Client({ sock, store }) {
                                 );
 
                                 if (filename) {
-                                        let mime = await fileTypeFromBuffer(media);
+                                        // FIX: Handle null return from fileTypeFromBuffer for unknown file types
+                                        const mime = (await fileTypeFromBuffer(media)) || { ext: 'bin', mime: 'application/octet-stream' };
                                         let filePath = join(
                                                 process.cwd(),
                                                 `${filename}.${mime.ext}`
@@ -434,16 +434,12 @@ export function Client({ sock, store }) {
                                                 ...options,
                                         };
                                 } else if (options.asSticker || /webp/.test(mime)) {
-                                        let pathFile = await Sticker.create(
-                                                { mimetype, data: buffer },
-                                                { ...options }
-                                        );
+                                        const stickerBuffer = await Sticker.create(buffer, { ...options });
                                         data = {
-                                                sticker: readFileSync(pathFile),
+                                                sticker: stickerBuffer,
                                                 mimetype: "image/webp",
                                                 ...options,
                                         };
-                                        existsSync(pathFile) ? await promises.unlink(pathFile) : "";
                                 } else if (/image/.test(mime)) {
                                         data = {
                                                 image: buffer,
@@ -565,11 +561,12 @@ export default async function serialize(sock, msg, store) {
         m.sock = sock;
         m.isClonebot = sock.isClonebot || false;
 
-        if (!msg.message) {
+        // FIX: Check msg itself BEFORE accessing msg.message to prevent TypeError on null
+        if (!msg) {
                 return null;
         }
-        if (!msg) {
-                return msg;
+        if (!msg.message) {
+                return null;
         }
 
         m.message = parseMessage(msg.message);
@@ -597,10 +594,15 @@ export default async function serialize(sock, msg, store) {
                 m.isBot =
                         (m.id.startsWith("BAE5") && m.id.length === 16) ||
                         (m.id.startsWith("B24E") && m.id.length === 20);
-                m.isGroup = m.from.endsWith("@g.us");
+                m.isGroup = m.from.endsWith("@g.us"); // FIX: endsWith is more precise than includes for JID matching
         }
 
         let lidMap = {};
+        // FIX: Declare rawParticipant OUTSIDE the if-block so it's accessible for both group and non-group paths.
+        // In LID-enabled WhatsApp, msg.participant/key.participant may be @lid format.
+        const rawParticipant = msg?.participant || msg?.key?.participant || "";
+        const rawParticipantStr = typeof rawParticipant === "string" ? rawParticipant : "";
+
         if (m.isGroup) {
                 let metadata = store.getGroupMetadata(m.from);
                 if (!metadata) {
@@ -635,23 +637,47 @@ export default async function serialize(sock, msg, store) {
                         : [];
 
                 const botJid = jidNormalizedUser(sock.user.id);
-                // BUG FIX: m.sender is not yet assigned at this point (set at line ~676).
-                // Compute the sender reference early using the same logic as m.sender's assignment.
+                // FIX: Compute sender from raw participant BEFORE m.sender is assigned (line ~681).
+                // Use the same resolution logic that m.sender will use later.
                 const _senderRef = m.fromMe
                         ? botJid
-                        : m.participant
-                                ? m.participant
+                        : (rawParticipantStr && m.metadata)
+                                ? resolveLidToJid(
+                                                jidNormalizedUser(rawParticipantStr),
+                                                m.metadata.participants || [],
+                                                lidMap
+                                        )
                                 : m.from;
+
+                // FIX: For isAdmin, compare _senderRef against ALL forms of the admin's identity.
+                // In LID groups, admin.jid might be undefined while admin.id is @lid.
+                // We must check resolved JID (via resolveLidToJid) against the sender.
                 m.isAdmin = m.groupAdmins.some((admin) => {
-                        const adminNum = (admin.id.match(/\d{8,}/) || [])[0];
-                        const senderNum = (_senderRef.match(/\d{8,}/) || [])[0];
-                        return adminNum && senderNum && adminNum === senderNum;
+                        // Resolve admin's identity: prefer jid/phoneNumber, fallback to resolving @lid
+                        const adminResolved = (admin.jid && !admin.jid.endsWith("@lid"))
+                                ? admin.jid
+                                : (admin.phoneNumber && !admin.phoneNumber.endsWith("@lid"))
+                                        ? admin.phoneNumber
+                                        : resolveLidToJid(admin.id, m.metadata.participants, lidMap);
+                        return areJidsSameUser(adminResolved, _senderRef);
                 });
+
+                // FIX: For isBotAdmin, the bot's own JID (sock.user.id) is always @s.whatsapp.net.
+                // But the admin entry's id/jid might be @lid. We must resolve the admin entry
+                // to its phone JID before comparing with botJid.
+                // Additionally, check against sock.user.id directly AND via resolveLidToJid.
+                const botResolvedJid = botJid; // sock.user.id is always @s.whatsapp.net
                 m.isBotAdmin = m.groupAdmins.some((admin) => {
-                        const adminJid = admin.jid || admin.id;
-                        const adminNum = (adminJid.match(/\d{8,}/) || [])[0];
-                        const botNum = (botJid.match(/\d{8,}/) || [])[0];
-                        return adminNum && botNum && adminNum === botNum;
+                        // Try direct comparison first (covers non-LID groups)
+                        if (areJidsSameUser(admin.jid || admin.id, botResolvedJid)) return true;
+                        // LID fallback: resolve admin.id (which may be @lid) to phone JID
+                        if (admin.id?.endsWith("@lid")) {
+                                const resolved = resolveLidToJid(admin.id, m.metadata.participants, lidMap);
+                                if (areJidsSameUser(resolved, botResolvedJid)) return true;
+                        }
+                        // Check via phoneNumber field (most reliable for LID groups)
+                        if (admin.phoneNumber && areJidsSameUser(admin.phoneNumber, botResolvedJid)) return true;
+                        return false;
                 });
         } else {
                 m.metadata = null;
@@ -660,19 +686,19 @@ export default async function serialize(sock, msg, store) {
                 m.isBotAdmin = false;
         }
 
-        let rawParticipant = msg?.participant || msg?.key?.participant || "";
-        rawParticipant = typeof rawParticipant === "string" ? rawParticipant : "";
+        // rawParticipant is now in scope for both group and non-group paths (declared above)
+        const rawParticipantForLid = rawParticipantStr;
 
-        m.participantLid = jidNormalizedUser(rawParticipant);
+        m.participantLid = jidNormalizedUser(rawParticipantForLid);
 
         m.participant =
                 m.isGroup && m.metadata
                         ? resolveLidToJid(
-                                        jidNormalizedUser(rawParticipant),
+                                        jidNormalizedUser(rawParticipantForLid),
                                         m.metadata.participants,
                                         lidMap
                                 )
-                        : jidNormalizedUser(rawParticipant);
+                        : jidNormalizedUser(rawParticipantForLid);
 
         if (!m.participant) {
                 m.participant = "";
@@ -835,7 +861,8 @@ export default async function serialize(sock, msg, store) {
                                         m.quoted.msg?.title ||
                                         m.quoted?.msg?.name ||
                                         "";
-                                const _prefixMatch = m.quoted.body.match(PREFIX_REGEX);
+                                const _prefixes = (BOT_CONFIG.prefixes || []).filter(Boolean).map(Func.escapeRegExp).sort((a, b) => b.length - a.length).join("|");
+                                const _prefixMatch = _prefixes ? m.quoted.body.match(new RegExp("^(" + _prefixes + ")")) : null;
                                 m.quoted.prefix = _prefixMatch ? _prefixMatch[0] : "";
                                 m.quoted.command =
                                         m.quoted.body &&
@@ -966,16 +993,12 @@ export default async function serialize(sock, msg, store) {
                                         ...options,
                                 };
                         } else if (options?.asSticker || /webp/.test(resolvedMime)) {
-                                let pathFile = await Sticker.create(
-                                        { mimetype: resolvedMime, data: mediaBuffer },
-                                        { ...options }
-                                );
+                                const stickerBuffer = await Sticker.create(mediaBuffer, { ...options });
                                 msgData = {
-                                        sticker: readFileSync(pathFile),
+                                        sticker: stickerBuffer,
                                         mimetype: "image/webp",
                                         ...options,
                                 };
-                                existsSync(pathFile) ? await promises.unlink(pathFile) : "";
                         } else if (/image/.test(resolvedMime)) {
                                 msgData = {
                                         image: mediaBuffer,

@@ -31,27 +31,44 @@ import { pollTask } from "#lib/itsrose";
  * @returns {Promise<boolean>} true if at least one image was sent
  */
 export async function sendAiImages(m, images, caption, opts = {}) {
-	const label = opts.label || "AI";
-	const timeout = opts.timeout || 60000;
+        const label = opts.label || "AI";
+        const timeout = opts.timeout || 60000;
 
-	if (!images || !images.length) {
-		await m.reply(`❌ ${label}: No images returned from API.`);
-		return false;
-	}
+        if (!images || !images.length) {
+                await m.reply(`❌ ${label}: No images returned from API.`);
+                return false;
+        }
 
-	try {
-		await sendAllImages(
-			m,
-			images,
-			(url, i) => (i === 0 ? caption : undefined),
-			{ label, timeout }
-		);
-		return true;
-	} catch (err) {
-		console.error(`[${label}] sendAiImages failed:`, err.message);
-		await m.reply(`❌ ${label}: Failed to deliver result image — ${err.message}`).catch(() => {});
-		return false;
-	}
+        // Normalize images: API may return objects ({ url, ... }) or plain URL strings
+        const urls = images.map(img => {
+                if (typeof img === "string") return img;
+                if (img?.url) return img.url;
+                // Last resort: try to find any string field that looks like a URL
+                for (const val of Object.values(img || {})) {
+                        if (typeof val === "string" && val.startsWith("http")) return val;
+                }
+                console.error(`[${label}] Cannot extract URL from image:`, typeof img, img);
+                return null;
+        }).filter(Boolean);
+
+        if (!urls.length) {
+                await m.reply(`❌ ${label}: Could not extract image URLs from API response.`);
+                return false;
+        }
+
+        try {
+                await sendAllImages(
+                        m,
+                        urls,
+                        (url, i) => (i === 0 ? caption : undefined),
+                        { label, timeout }
+                );
+                return true;
+        } catch (err) {
+                console.error(`[${label}] sendAiImages failed:`, err.message);
+                await m.reply(`❌ ${label}: Failed to deliver result image — ${err.message}`).catch(() => {});
+                return false;
+        }
 }
 
 /**
@@ -70,41 +87,41 @@ export async function sendAiImages(m, images, caption, opts = {}) {
  * @returns {Promise<boolean>} true if at least one image was sent
  */
 export async function submitPollAndSend(m, submitData, caption, opts = {}) {
-	const {
-		pollPath,
-		label = "AI",
-		intervalMs = 4000,
-		maxAttempts = 35,
-		timeout = 60000,
-	} = opts;
+        const {
+                pollPath,
+                label = "AI",
+                intervalMs = 4000,
+                maxAttempts = 35,
+                timeout = 60000,
+        } = opts;
 
-	// ── 1. Check for immediate result ──
-	if (submitData?.images?.length > 0) {
-		return sendAiImages(m, submitData.images, caption, { label, timeout });
-	}
+        // ── 1. Check for immediate result ──
+        if (submitData?.images?.length > 0) {
+                return sendAiImages(m, submitData.images, caption, { label, timeout });
+        }
 
-	// ── 2. Poll for async result ──
-	const taskId = submitData?.task_id;
-	if (!taskId) {
-		await m.reply(`❌ ${label}: No task ID returned from API.`);
-		return false;
-	}
+        // ── 2. Poll for async result ──
+        const taskId = submitData?.task_id;
+        if (!taskId) {
+                await m.reply(`❌ ${label}: No task ID returned from API.`);
+                return false;
+        }
 
-	try {
-		const result = await pollTask(taskId, pollPath, {
-			intervalMs,
-			maxAttempts,
-			label,
-		});
-		return sendAiImages(m, result.images || [], caption, { label, timeout });
-	} catch (err) {
-		if (err.message.includes("failed")) {
-			await m.reply(`❌ ${label} processing failed on the server.`);
-		} else if (err.message.includes("timed out")) {
-			await m.reply(`⏰ ${label} timed out — the server is busy, try again later.`);
-		} else {
-			await m.reply(`❌ ${label}: ${err.message}`);
-		}
-		return false;
-	}
+        try {
+                const result = await pollTask(taskId, pollPath, {
+                        intervalMs,
+                        maxAttempts,
+                        label,
+                });
+                return sendAiImages(m, result.images || [], caption, { label, timeout });
+        } catch (err) {
+                if (err.message.includes("failed")) {
+                        await m.reply(`❌ ${label} processing failed on the server.`);
+                } else if (err.message.includes("timed out")) {
+                        await m.reply(`⏰ ${label} timed out — the server is busy, try again later.`);
+                } else {
+                        await m.reply(`❌ ${label}: ${err.message}`);
+                }
+                return false;
+        }
 }

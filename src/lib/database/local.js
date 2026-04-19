@@ -1,5 +1,6 @@
 import { GroupSchema, SettingsSchema, UserSchema } from "#lib/schema/index";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 
 class Helper {
         constructor(name, data, schema) {
@@ -22,7 +23,7 @@ class Helper {
                                                 : this.schema[k];
                         }
                 }
-                if (value && typeof value === "object") {
+                if (value !== null && value !== undefined && typeof value === "object") {
                         Object.assign(this._data[key], value);
                 }
                 return this._data[key];
@@ -88,9 +89,9 @@ class LocalDB {
                 this.#initialized = true;
         }
 
-        save() {
+        async save() {
                 if (!this.#dirty) return; // Skip save if nothing changed
-                writeFileSync(this.#path, JSON.stringify(this.#data, null, 2));
+                await writeFile(this.#path, JSON.stringify(this.#data, null, 2));
                 this.#dirty = false;
         }
 

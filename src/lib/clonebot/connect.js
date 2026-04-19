@@ -29,8 +29,8 @@ export class CloneBot {
                         stdTTL: 60 * 60,
                         checkperiod: 120,
                 });
-                this.pluginManager = new PluginManager(BOT_CONFIG);
                 this.store = new Store(this.sessionName);
+                this.pluginManager = new PluginManager(BOT_CONFIG, this.store);
                 this.messageHandler = new Message(
                         this.pluginManager,
                         BOT_CONFIG.ownerJids,
@@ -127,14 +127,16 @@ export class CloneBot {
                                 const normalizedParticipants =
                                         participants.map(jidNormalizedUser);
                                 switch (action) {
-                                        case "add":
+                                        case "add": {
+                                                const newParticipants = normalizedParticipants.filter(id => !metadata.participants.some(p => p.id === id));
                                                 metadata.participants.push(
-                                                        ...normalizedParticipants.map((id) => ({
+                                                        ...newParticipants.map((id) => ({
                                                                 id,
                                                                 admin: null,
                                                         }))
                                                 );
                                                 break;
+                                        }
                                         case "promote":
                                                 metadata.participants.forEach((p) => {
                                                         if (
@@ -177,16 +179,18 @@ export class CloneBot {
                         const { connection, lastDisconnect } = update;
 
                         if (!state.creds.registered && connection === "connecting") {
-                                try {
-                                        await new Promise((r) => setTimeout(r, 3000));
-                                        let code = await this.sock.requestPairingCode(this.phone);
-                                        code = code?.match(/.{1,4}/g)?.join("-") || code;
-                                        onSuccess?.({ code, sessionName: this.sessionName });
-                                } catch (e) {
-                                        await removeCreds();
-                                        await CloneSessionModel.remove(this.sessionName);
-                                        onError?.(e);
-                                }
+                                this._pairingTimer = setTimeout(async () => {
+                                        try {
+                                                let code = await this.sock.requestPairingCode(this.phone);
+                                                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                                                onSuccess?.({ code, sessionName: this.sessionName });
+                                        } catch (e) {
+                                                await removeCreds();
+                                                await CloneSessionModel.remove(this.sessionName);
+                                                onError?.(e);
+                                        }
+                                }, 3000);
+                                return;
                         }
                         if (connection === "open") {
                                 this.reconnectCount = 0;

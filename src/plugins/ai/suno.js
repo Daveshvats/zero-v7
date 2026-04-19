@@ -39,7 +39,7 @@ export default {
                 "/ai_song/submit_task",
                 {
                     mode: "auto",
-                    model: "v3.0",
+                    model: "v3.0", // NOTE: Hardcoded model version — update when Suno releases new versions. Consider making configurable via env var (e.g., SUNO_MODEL).
                     prompt: input,
                 }
             );
@@ -47,7 +47,7 @@ export default {
             const { data: submitData } = submitResponse;
 
             // Debug log to confirm structure
-            console.log("Submit Response:", JSON.stringify(submitData, null, 2));
+            console.debug("Submit Response:", JSON.stringify(submitData, null, 2));
 
             if (!submitData.status || !submitData.result || !submitData.result.task_ids) {
                 return m.reply(`Submission failed. API Response: ${submitData.message || "Invalid structure"}`);
@@ -95,7 +95,7 @@ export default {
                         }
                     }
                 } catch (innerError) {
-                    console.log("Polling error (ignoring):", innerError.message);
+                    console.error("Polling error (ignoring):", innerError.message);
                 }
 
                 // Wait 4 seconds between subsequent checks

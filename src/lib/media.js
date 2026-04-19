@@ -63,7 +63,7 @@ export async function downloadMedia(url, opts = {}) {
  */
 export async function sendImage(m, url, caption, opts = {}) {
         try {
-                const { data, mime, size } = await downloadMedia(url, opts);
+                const { data, mime } = await downloadMedia(url, opts);
                 return await m.reply({ image: data, mimetype: mime, caption }, opts.extra);
         } catch (err) {
                 console.error(`[media] sendImage failed:`, err.message);
@@ -77,7 +77,7 @@ export async function sendImage(m, url, caption, opts = {}) {
  */
 export async function sendVideo(m, url, caption, opts = {}) {
         try {
-                const { data, mime, size } = await downloadMedia(url, opts);
+                const { data, mime } = await downloadMedia(url, opts);
                 return await m.reply(
                         { video: data, mimetype: mime || "video/mp4", caption, ...(opts.extra || {}) },
                         opts.extra

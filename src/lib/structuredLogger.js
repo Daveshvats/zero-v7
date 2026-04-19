@@ -28,7 +28,7 @@ class StructuredLogger {
                 this.minLevel = LOG_LEVELS[options.level?.toUpperCase()] || LOG_LEVELS.DEBUG;
                 this.logToFile = options.logToFile ?? false;
                 this.logDir = options.logDir || join(__dirname, "../../logs");
-                this.maxFileSize = options.maxFileSize || 10 * 1024 * 1024;
+                this.maxFileSize = options.maxFileSize || 10 * 1024 * 1024; // NOTE: Reserved for future log rotation implementation
                 this.context = options.context || "BOT";
 
                 if (this.logToFile) {

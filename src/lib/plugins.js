@@ -565,14 +565,6 @@ class PluginManager {
                         return true;
                 }
 
-                if (plugin.owner && isClonebot && !m.isOwner) {
-                        await m.reply("🔒 Owner-only command");
-                        if (plugin.react) {
-                                await m.react("❌");
-                        }
-                        return true;
-                }
-
                 if (plugin.permissions === "admin" && !isGroupAdmin && !isOwner) {
                         await m.reply("👮‍♂️ Admin-only command");
                         if (plugin.react) {

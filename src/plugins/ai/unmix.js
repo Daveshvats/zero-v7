@@ -90,6 +90,7 @@ export default {
 
                 return;
             } catch (e) {
+                // NOTE: This error string matching is fragile — consider using error codes or status fields instead
                 if (e.message.includes('failed') || e.message.includes('error')) {
                     return m.reply("❌ Audio separation failed.");
                 }

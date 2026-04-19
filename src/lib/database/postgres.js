@@ -136,9 +136,9 @@ async function runAutoMigrations(pool) {
                 `CREATE INDEX IF NOT EXISTS idx_voice_clones_group_name ON voice_clones(group_jid, name)`,
         ];
 
-        for (const sql of [...migrations, ...indexMigrations]) {
+        for (const statement of [...migrations, ...indexMigrations]) {
                 try {
-                        await pool.query(sql);
+                        await pool.query(statement);
                 } catch (err) {
                         // Ignore "column already exists" or table-not-found errors during first boot
                         if (!err.message.includes("already exists") && !err.message.includes("does not exist")) {
@@ -507,11 +507,10 @@ export const SettingsModel = {
         },
 
         async updateSettings(update) {
+                if (!db) return;
                 const current = await this.getSettings();
                 const merged = { ...current, ...update };
-                for (const [key, value] of Object.entries(merged)) {
-                        await this.setSetting(key, value);
-                }
+                await this.setSettings(merged); // FIX: Use batch method instead of N individual upserts
         },
 };
 
@@ -775,7 +774,6 @@ export const VoiceModel = {
                                         set: { voiceId, clonedBy },
                                 })
                                 .returning();
-                        console.log(`[VoiceModel.saveClone] saved: group="${groupJid}" name="${normalizedName}" voiceId="${voiceId}"`);
                         return result;
                 } catch (err) {
                         print.debug(`VoiceModel.saveClone error: ${err.message}`);
@@ -787,7 +785,6 @@ export const VoiceModel = {
         async getClone(groupJid, name) {
                 if (!db) return null;
                 const searchName = name.toLowerCase();
-                console.log(`[VoiceModel.getClone] group="${groupJid}" name="${name}" → searchName="${searchName}"`);
                 const [row] = await db
                         .select()
                         .from(schema.voiceClones)
@@ -797,7 +794,6 @@ export const VoiceModel = {
                                         eq(schema.voiceClones.name, searchName),
                                 )
                         );
-                console.log(`[VoiceModel.getClone] result:`, row ? `id=${row.id} name="${row.name}" voiceId="${row.voiceId}"` : "null");
                 return row || null;
         },
 

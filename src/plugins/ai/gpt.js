@@ -25,12 +25,12 @@ export default {
                         let query = m.text;
                         if (m.quoted?.text?.length > 0 && query.length > 0) {
                                 query += "\n\n" + m.quoted.text;
-                        } else if (query.length == 0 && m.quoted?.text?.length > 0) {
+                        } else if (!query && m.quoted?.text?.length > 0) {
                                 query = m.quoted.text;
                         }
 
                         const { data } = await api.Gratis.post("/gpt/chat", {
-                                model: "gpt-4o-mini",
+                                model: "gpt-4o-mini", // NOTE: Hardcoded model — consider making configurable via env var (e.g., GPT_MODEL).
                                 messages: [
                                         { role: "developer", content: "You are a helpful assistant." },
                                         { role: "user", content: query },

@@ -29,7 +29,7 @@ export default {
                                         `Where is the path?\n${m.prefix + m.command} src/plugin/*/icikiwir.js`
                                 );
                         }
-                        if (!m.quoted.text) {
+                        if (!m.quoted || !m.quoted.text) {
                                 return m.reply("Reply code.");
                         }
                         await writeFile(m.text, m.quoted.text);

@@ -2,13 +2,13 @@ import fetch from "node-fetch";
 
 export default {
         name: "qrcode",
-        description: "Convert text to an image",
+        description: "Generate a QR code from text",
         command: ["qr", "qrcode", "qr-code"],
         permissions: "all",
         hidden: false,
         failed: "Failed to %command: %error",
-        wait: "⏳ Creating text image...",
-        category: "fun",
+        wait: "⏳ Creating QR code...",
+        category: "canvas",
         cooldown: 10,
         limit: true,
         usage: "$prefix$command <text>",
@@ -26,7 +26,7 @@ export default {
                                 text = m.quoted.text;
                         } else {
                                 return m.reply(
-                                        `❌ Please provide text!\n\n*Usage:* !textimg <your text>\n*Example:* !textimg Hello World!`
+                                        `❌ Please provide text!\n\n*Usage:* !qr <text>\n*Example:* !qr Hello World!`
                                 );
                         }
                 }
@@ -48,11 +48,11 @@ export default {
 
                         await m.reply({
                                 image: buffer,
-                                caption: `✍🏻 *Text Image Created!*\n\n📝 Text: ${text}`,
+                                caption: `✍🏻 *QR Code Created!*\n\n📝 Text: ${text}`,
                         });
                 } catch (e) {
-                        console.error("[textimg ERROR]:", e);
-                        m.reply(`❌ Failed to create text image: ${e.message}`);
+                        console.error("[qrcode ERROR]:", e);
+                        m.reply(`❌ Failed to create QR code: ${e.message}`);
                 }
         },
 };

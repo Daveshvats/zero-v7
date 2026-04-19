@@ -1,16 +1,14 @@
 import itsrose from "#lib/itsrose";
 import { sendAudioBuffer } from "#lib/media";
 
-/** Lazy-loaded DB references (same pattern as caiAutoGroup.js) */
+/** Lazy-loaded DB references (same pattern as src/plugins/_auto/caiAutoGroup.js) */
 let VoiceModel = null;
-let GroupModel = null;
 async function getDB() {
-    if (!VoiceModel || !GroupModel) {
+    if (!VoiceModel) {
         const db = await import("#lib/database/index");
         VoiceModel = db.VoiceModel;
-        GroupModel = db.GroupModel;
     }
-    return { VoiceModel, GroupModel };
+    return { VoiceModel };
 }
 
 export default {
@@ -194,27 +192,22 @@ export default {
             try {
                 // Resolve voice ID: check if it's a saved name first (short string, not hex ID)
                 let voiceId = rawId;
-                const isLikelyId = /^[a-f0-9]{20,}$/i.test(rawId);
-                console.log(`[TTS-SPEAK] rawId="${rawId}" | isLikelyId=${isLikelyId} | isGroup=${m.isGroup} | isGroupCached=${!!m.isGroup}`);
+                const isLikelyId = /^[a-z0-9]{18,}$/i.test(rawId);
 
                 if (!isLikelyId && m.isGroup) {
                     const { VoiceModel } = await getDB();
                     const clone = await VoiceModel.getClone(m.from, rawId);
-                    console.log(`[TTS-SPEAK] DB lookup: group=${m.from} name="${rawId}" →`, clone ? `FOUND voiceId="${clone.voiceId}"` : "NOT FOUND");
                     if (clone) {
                         voiceId = clone.voiceId;
                     }
                     // If not found by name, fall through and use rawId as-is (might be a short ID)
                 }
-
-                console.log(`[TTS-SPEAK] Final voiceId="${voiceId}" | text="${text.slice(0, 60)}"`);
                 await m.reply("⌛ Generating speech...");
 
                 const res = await itsrose.post(
                     "/elevenlabs/inference_text",
                     { server_id: "rose", voice_id: voiceId, text }
                 ).catch(e => e.response);
-                console.log(`[TTS-SPEAK] API response: ok=${res?.data?.ok} status=${res?.status} msg=${res?.data?.message || 'none'}`);
 
                 if (!res?.data?.ok) {
                     return m.reply(`❌ API Error: ${res?.data?.message || "Server error"}`);
@@ -249,19 +242,15 @@ export default {
             try {
                 // Resolve voice ID from saved name if it's not a hex ID
                 let voiceId = rawId;
-                const isLikelyId = /^[a-f0-9]{20,}$/i.test(rawId);
-                console.log(`[TTS-V2V] rawId="${rawId}" | isLikelyId=${isLikelyId} | isGroup=${m.isGroup}`);
+                const isLikelyId = /^[a-z0-9]{18,}$/i.test(rawId);
 
                 if (!isLikelyId && m.isGroup) {
                     const { VoiceModel } = await getDB();
                     const clone = await VoiceModel.getClone(m.from, rawId);
-                    console.log(`[TTS-V2V] DB lookup: group=${m.from} name="${rawId}" →`, clone ? `FOUND voiceId="${clone.voiceId}"` : "NOT FOUND");
                     if (clone) {
                         voiceId = clone.voiceId;
                     }
                 }
-
-                console.log(`[TTS-V2V] Final voiceId="${voiceId}"`);
                 await m.reply("⌛ Converting voice...");
 
                 const buffer = await quoted.download();
@@ -271,7 +260,6 @@ export default {
                     "/elevenlabs/inference_voice",
                     { server_id: "rose", voice_id: voiceId, init_audio: buffer.toString("base64") }
                 ).catch(e => e.response);
-                console.log(`[TTS-V2V] API response: ok=${res?.data?.ok} status=${res?.status} msg=${res?.data?.message || 'none'}`);
 
                 if (!res?.data?.ok) {
                     return m.reply(`❌ API Error: ${res?.data?.message || "Server error"}`);

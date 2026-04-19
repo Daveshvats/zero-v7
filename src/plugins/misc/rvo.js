@@ -41,7 +41,6 @@ export default {
                                 quoted: m,
                                 ephemeralExpiration: m.expiration,
                         });
-                        isPrivate;
                 } catch (error) {
                         await m.reply(`❌ Error: ${error.message || 'Unknown error occurred'}`);
                 }

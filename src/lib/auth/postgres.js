@@ -99,6 +99,7 @@ function ensurePoolerURL(connectionString) {
 }
 
 async function ensureTable(pool, tableName) {
+        if (!/^[a-zA-Z_]+$/.test(tableName)) throw new Error("Invalid table name");
         await pool.query(`
                 CREATE TABLE IF NOT EXISTS ${tableName} (
                         id SERIAL PRIMARY KEY,
@@ -116,6 +117,8 @@ async function connectToPostgres(tableName = "auth_state") {
         if (!process.env.DATABASE_URL) {
                 throw new Error("DATABASE_URL is required for PostgreSQL auth.");
         }
+
+        if (!/^[a-zA-Z_]+$/.test(tableName)) throw new Error("Invalid table name");
 
         if (!pool) {
                 let connectionString = normalizeSSL(process.env.DATABASE_URL);

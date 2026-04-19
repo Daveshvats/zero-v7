@@ -2,15 +2,13 @@ import axios from "axios";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
 import { access, constants, readFile, stat } from "node:fs/promises";
-import { existsSync, promises, readFileSync, statSync } from "node:fs";
+import { promises } from "node:fs";
 import { join } from "node:path";
 
 export const getRandom = (ext) => {
         return `${Math.floor(Math.random() * 10000)}${ext}`;
 };
 
-// TODO: fetchBuffer uses sync fs operations (existsSync, statSync, readFileSync).
-// Consider migrating to async fs/promises for better event loop performance.
 export async function fetchBuffer(string, options = {}) {
         try {
                 if (/^https?:\/\//i.test(string)) {
@@ -47,7 +45,9 @@ export async function fetchBuffer(string, options = {}) {
                 }
 
                 if (/^data:.*?\/.*?base64,/i.test(string)) {
-                        let data = Buffer.from(string.split`,`[1], "base64");
+                        const parts = string.split(',');
+                        if (parts.length < 2) throw new Error("Invalid base64 data URI: no comma separator found");
+                        let data = Buffer.from(parts[1], "base64");
                         let size = Buffer.byteLength(data);
                         const fileType = await fileTypeFromBuffer(data);
 
@@ -119,19 +119,9 @@ export async function fetchBuffer(string, options = {}) {
                         };
                 }
 
-                let buffer = Buffer.alloc(20);
-                let size = Buffer.byteLength(buffer);
-                const fileType = await fileTypeFromBuffer(buffer);
-
-                return {
-                        data: buffer,
-                        size,
-                        sizeH: formatSize(size),
-                        ...(fileType || {
-                                mime: "application/octet-stream",
-                                ext: ".bin",
-                        }),
-                };
+                throw new Error(
+                        `fetchBuffer: unable to resolve input "${String(string).slice(0, 80)}..." — must be a URL, data URI, file path, Buffer, or base64 string`
+                );
         } catch (e) {
                 throw new Error(e?.message || e);
         }
@@ -221,14 +211,12 @@ export const reSize = async (buffer, width, height) => {
         return sharp(buffer).resize(width, height).jpeg().toBuffer();
 };
 
+// NOTE: bytesToSize supports up to YB with configurable decimals; formatSize is the simpler version (up to TB). Keep both for backward compatibility.
 // NOTE: `sleep` was removed as a duplicate of `delay`. Use `delay(ms)` instead.
 
 export const isUrl = (url) => {
         return url.match(
-                new RegExp(
-                        /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&/=]*)/,
-                        "gi"
-                )
+                /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&\/=]*)/gi
         );
 };
 

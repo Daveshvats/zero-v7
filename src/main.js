@@ -151,6 +151,22 @@ async function main() {
                         5
                 );
 
+                gracefulShutdown.register(
+                        "workers",
+                        async () => {
+                                try {
+                                        const workerPool = (await import("#lib/workers/pool")).default;
+                                        if (typeof workerPool.terminate === "function") {
+                                                workerPool.terminate();
+                                                print.info("Worker pool terminated");
+                                        }
+                                } catch (e) {
+                                        print.debug("Worker pool shutdown skipped: " + e.message);
+                                }
+                        },
+                        6
+                );
+
                 healthMonitor.registerComponent("whatsapp", async () => {
                         const connected = bot.sock && bot.sock.user;
                         return {

@@ -59,11 +59,13 @@ const _consoleLog = console.log;
 const _consoleDebug = console.debug;
 const _consoleInfo = console.info;
 const _consoleWarn = console.warn;
+const _consoleError = console.error;
 
 console.log = filterFn(_consoleLog);
 console.debug = filterFn(_consoleDebug);
 console.info = filterFn(_consoleInfo);
 console.warn = filterFn(_consoleWarn);
+console.error = filterFn(_consoleError);
 
 // ── Patch Console.prototype (catches `new Console()` instances) ────
 const { Console } = await import("node:console");
@@ -72,8 +74,10 @@ const _protoLog = Console.prototype.log;
 const _protoDebug = Console.prototype.debug;
 const _protoInfo = Console.prototype.info;
 const _protoWarn = Console.prototype.warn;
+const _protoError = Console.prototype.error;
 
 Console.prototype.log = filterFn(_protoLog);
 Console.prototype.debug = filterFn(_protoDebug);
 Console.prototype.info = filterFn(_protoInfo);
 Console.prototype.warn = filterFn(_protoWarn);
+Console.prototype.error = filterFn(_protoError);

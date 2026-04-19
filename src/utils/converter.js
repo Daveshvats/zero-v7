@@ -145,6 +145,9 @@ export async function webpToVideo(buffer) {
         await writeFile(input, buffer);
 
         return new Promise((resolve, reject) => {
+                // NOTE: Uses ImageMagick's `convert` command for WebP → GIF conversion.
+                // This requires ImageMagick to be installed on the system and may not work on all environments.
+                // ffmpeg is used for the subsequent GIF → MP4 step. Consider replacing with a pure ffmpeg pipeline if ImageMagick is unavailable.
                 const convert = spawn("convert", [input, gif]);
                 convert.on("error", async (err) => {
                         try { await unlink(input); } catch {}

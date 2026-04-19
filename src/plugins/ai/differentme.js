@@ -37,7 +37,7 @@ export default {
         // --- FETCH STYLES FROM API ---
         if (rawText.includes("--fetch")) {
             const isV2 = rawText.includes("--v2");
-            const catId = args.find(a => a && !a.startsWith("--") && a !== "fetch");
+            const catId = args.find(a => a && !a.startsWith("--"));
             const endpoint = isV2 ? "/different_me/get_styles_v2" : "/different_me/get_styles";
 
             try {

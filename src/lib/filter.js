@@ -25,7 +25,7 @@ const BANNED_WORDS = [
  * Built once at startup instead of creating new regex on every message.
  */
 const BANNED_PATTERN = new RegExp(
-        BANNED_WORDS.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+        BANNED_WORDS.map((w) => '\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').join('|'),
         'i'
 );
 

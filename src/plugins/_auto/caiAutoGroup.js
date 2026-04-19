@@ -83,7 +83,10 @@ export default {
                             caiCharName: group.caiCharName,
                             caiChatId: group.caiChatId,
                         } : null;
-                        console.debug("[CAI-AUTO] DB config loaded:", m.from, config ? `enabled=${config.caiEnabled} char=${config.caiCharId}` : "null (disabled)");
+                        // Only log on cache miss for ENABLED groups — disabled groups are noise
+                        if (config?.caiEnabled) {
+                            console.debug("[CAI-AUTO] DB config loaded:", m.from, `enabled=true char=${config.caiCharId}`);
+                        }
                     } catch (err) {
                         console.debug("[CAI-AUTO] DB error for", m.from, err.message);
                         config = null;
@@ -115,28 +118,55 @@ export default {
                 // Strategy 2: Resolve @lid JIDs via group participant metadata
                 // In newer WhatsApp/Baileys, mention JIDs use @lid (Linked ID) instead of @s.whatsapp.net.
                 // The @lid number is an opaque WhatsApp internal ID, NOT the phone number.
-                // We resolve it by fetching group participants and matching each participant's lid.
+                // We resolve it by finding the bot's entry in group participants and matching its lid.
                 if (!isBotMentioned && mentions.some(j => j.endsWith('@lid'))) {
                     try {
-                        const meta = await sock.groupMetadata(m.from);
+                        // Use m.metadata if available (already fetched and LID-resolved by serialize.js)
+                        // to avoid redundant groupMetadata calls
+                        const meta = m.metadata || await sock.groupMetadata(m.from);
                         const participants = meta?.participants || [];
 
-                        // Find the bot's participant entry (match by phone number in id)
+                        // FIX: In LID groups, p.id may be @lid (e.g. 189713587650632@lid), not the phone number.
+                        // We cannot match by extracting digits from p.id. Instead, match botNum against:
+                        //   1. p.phoneNumber field (which is the real phone JID)
+                        //   2. p.jid field (if it's a phone JID)
+                        //   3. Extract digits from p.phoneNumber if id is @lid
                         const botParticipant = participants.find(p => {
-                            const pNum = (p.id?.match(/\d{8,}/) || [])[0];
-                            return pNum === botNum;
+                            // Check phoneNumber field (most reliable — contains actual phone JID)
+                            if (p.phoneNumber) {
+                                const pnNum = (p.phoneNumber.match(/\d{8,}/) || [])[0];
+                                if (pnNum === botNum) return true;
+                            }
+                            // Check jid field
+                            if (p.jid && !p.jid.endsWith('@lid')) {
+                                const jNum = (p.jid.match(/\d{8,}/) || [])[0];
+                                if (jNum === botNum) return true;
+                            }
+                            // Check id field only if it's a phone JID (not @lid)
+                            if (p.id && !p.id.endsWith('@lid')) {
+                                const iNum = (p.id.match(/\d{8,}/) || [])[0];
+                                if (iNum === botNum) return true;
+                            }
+                            return false;
                         });
 
                         if (botParticipant) {
                             // Build set of all known bot JIDs (phone JID + lid JID + variations)
                             const botJidSet = new Set([
-                                botParticipant.id,                         // 918708464494@s.whatsapp.net
+                                botParticipant.id,                         // may be @lid or @s.whatsapp.net
                                 `${botNum}@s.whatsapp.net`,               // fallback
-                                `${botNum}@lid`,                           // guess
                             ]);
                             // Add lid if participant has one
                             if (botParticipant.lid) {
-                                botJidSet.add(botParticipant.lid);         // 189713587650632@lid
+                                botJidSet.add(botParticipant.lid);         // e.g. 189713587650632@lid
+                            }
+                            // Add jid if participant has one and it differs from id
+                            if (botParticipant.jid && botParticipant.jid !== botParticipant.id) {
+                                botJidSet.add(botParticipant.jid);
+                            }
+                            // Add phoneNumber if available and differs
+                            if (botParticipant.phoneNumber && botParticipant.phoneNumber !== botParticipant.id) {
+                                botJidSet.add(botParticipant.phoneNumber);
                             }
 
                             isBotMentioned = mentions.some(jid => botJidSet.has(jid));

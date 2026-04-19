@@ -118,7 +118,7 @@ export const cache = {
                         } while (cursor !== 0);
                         return allKeys;
                 }
-                const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+                const regex = new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, ".*") + "$");
                 return Array.from(memoryCache.keys()).filter((k) => regex.test(k));
         },
 

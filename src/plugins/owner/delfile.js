@@ -30,7 +30,11 @@ export default {
                                         `Where is the path?\n${m.prefix + m.command} src/plugin/*/icikiwir.js`
                                 );
                         }
-                        const filePath = join(process.cwd(), m.text);
+                        const resolvedPath = join(process.cwd(), m.text);
+                        if (!resolvedPath.startsWith(process.cwd())) {
+                                return await m.reply('❌ Path must be within the project directory.');
+                        }
+                        const filePath = resolvedPath;
                         let fileExists = false;
                         try { await access(filePath); fileExists = true; } catch {}
                         if (!fileExists) {
@@ -39,7 +43,7 @@ export default {
                                 );
                         }
                         if ((await stat(filePath)).isDirectory()) {
-                                await rm(filePath, { recursive: true });
+                                await rm(filePath, { recursive: true, force: true });
                         } else {
                                 await unlink(filePath);
                         }

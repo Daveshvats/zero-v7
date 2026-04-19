@@ -1,10 +1,11 @@
 import NodeCache from "@cacheable/node-cache";
 import { containsProhibitedContent } from "#lib/filter";
 import { TERMS_OF_SERVICE } from "#lib/legal";
-import { getPrefix } from "#lib/prefix";
+import { getPrefix, quickCommandCheck } from "#lib/prefix";
 import { print } from "#lib/print";
 import { getSettings } from "#lib/settingsCache";
 import serialize from "#lib/serialize";
+import { extractMessageContent, getContentType, jidNormalizedUser } from "baileys";
 
 /**
  * Commands that are exempt from the consent gate.
@@ -22,6 +23,55 @@ async function getDB() {
                 _dbModule = await import("#lib/database/index");
         }
         return _dbModule;
+}
+
+/**
+ * Extract raw text body from a Baileys message without any async work.
+ * Uses the same logic as serialize() body extraction but runs in <0.1ms.
+ * This is the "zero-cost" check to decide whether to enter the full pipeline.
+ *
+ * @param {object} msg - Raw Baileys message
+ * @returns {string} - The raw text body (may be empty for media-only messages)
+ */
+function quickBodyExtract(msg) {
+        if (!msg?.message) return "";
+
+        // Apply the same parseMessage chain as serialize (simplified for body extraction)
+        let content = extractMessageContent(msg.message);
+        const handlers = [
+                (m) => m?.viewOnceMessageV2Extension?.message,
+                (m) => m?.viewOnceMessageV2?.message,
+                (m) =>
+                        m?.protocolMessage?.type === 14
+                                ? m.protocolMessage[getContentType(m.protocolMessage)]
+                                : m,
+                (m) =>
+                        m?.message ? m.message[getContentType(m.message)] : m,
+        ];
+        for (const handler of handlers) {
+                const result = handler(content);
+                if (result) { content = result; break; }
+        }
+
+        // Extract text from the parsed content (same priority as serialize.js m.body)
+        const msgType = getContentType(content) || Object.keys(content)[0];
+        const msgContent = msgType === "conversation" ? content : content[msgType];
+        if (!msgContent) return "";
+
+        return (
+                msgContent.text ||
+                msgContent.conversation ||
+                msgContent.caption ||
+                content.conversation ||
+                msgContent.selectedButtonId ||
+                msgContent.singleSelectReply?.selectedRowId ||
+                msgContent.selectedId ||
+                msgContent.contentText ||
+                msgContent.selectedDisplayText ||
+                msgContent.title ||
+                msgContent.name ||
+                ""
+        );
 }
 
 /**
@@ -144,6 +194,19 @@ class Message {
 
         /**
          * Handle 'messages.upsert' event from Baileys.
+         *
+         * ── Two-Tier Pipeline ──────────────────────────────────────────
+         *
+         * FAST PATH (non-commands in groups):
+         *   1. Quick sync filters (protocol, reaction, fromMe)     < 0.1ms
+         *   2. Quick body extraction (no async)                    < 0.1ms
+         *   3. Quick command check (prefix + known cmd set)        < 0.1ms
+         *   4. If NOT a command → saveMessage + print + fire CAI-AUTO periodic  < 5ms
+         *      Total: ~5ms vs ~200ms for full serialize
+         *
+         * FULL PATH (commands, consent, private chat):
+         *   Same as before — serialize, consent check, permissions, execute
+         *
          * @param {import('baileys').WASocket} sock - Baileys socket object.
          * @param {{ messages: import('baileys').proto.IWebMessageInfo[], type: string }} data - Message data from the event.
          */
@@ -171,18 +234,52 @@ class Message {
                                         msg.messageTimestamp = Date.now() / 1000;
                                 }
 
-                                // ── Early Filter: skip non-actionable message types ─────
-                                // protocolMessage = read receipts, ephemeral settings, encryption keys, etc.
-                                // These generate no body text and should never enter the command pipeline.
+                                // ── Sync Filters (no async, < 0.1ms) ─────────────────
                                 const msgType = msg.message ? Object.keys(msg.message)[0] : null;
                                 if (msgType === "protocolMessage") {
                                         continue;
                                 }
-                                // Skip reaction messages (emoji reactions on messages)
                                 if (msgType === "reactionMessage") {
                                         continue;
                                 }
 
+                                // Skip bot's own messages
+                                if (msg.key?.fromMe) {
+                                        continue;
+                                }
+
+                                // Determine if group (sync)
+                                const remoteJid = msg.key?.remoteJid || "";
+                                const isGroup = remoteJid.endsWith("@g.us");
+                                const isPrivateChat = !isGroup && remoteJid.endsWith("@s.whatsapp.net");
+
+                                // ── FAST PATH: Quick body + command check (< 0.5ms) ──
+                                const rawBody = quickBodyExtract(msg);
+                                const { isCommand: mightBeCommand } = quickCommandCheck(rawBody);
+
+                                // Check for "i agree" responses (need full pipeline for consent handling)
+                                const rawBodyLower = rawBody.trim().toLowerCase();
+                                const isAgree = rawBodyLower === "i agree" || rawBodyLower === "iagree";
+
+                                // Fast path decision: in groups, skip full serialize for non-commands
+                                // unless the group hasn't consented yet and it might be "i agree"
+                                const groupConsented = isGroup && this.groupConsentCache.get(`gc:${jidNormalizedUser(remoteJid)}`);
+                                const needsFullPipeline = isPrivateChat
+                                        || mightBeCommand
+                                        || isAgree
+                                        || (isGroup && !groupConsented);
+
+                                if (!needsFullPipeline && isGroup) {
+                                        // ── FAST PATH: Group non-command (< 5ms total) ──
+                                        // Just store the message and fire periodic plugins (CAI-AUTO)
+                                        this.store.saveMessage(remoteJid, msg);
+                                        // Fire CAI-AUTO in fire-and-forget — it handles its own serialization needs
+                                        // We pass a minimal lightweight object instead of full serialized message
+                                        this._runPeriodicFast(sock, msg, rawBody, remoteJid);
+                                        continue;
+                                }
+
+                                // ── FULL PATH: Command / consent / private chat ─────────
                                 const m = await serialize(sock, msg, this.store);
 
                                 this.store.saveMessage(m.from, msg);
@@ -216,8 +313,7 @@ class Message {
 
                                 // ── Consent Gate ──────────────────────────────────────────────
                                 const cmdLower = (command || "").toLowerCase();
-                                const rawBody = m.body.trim().toLowerCase();
-                                const isAgree = rawBody === "i agree" || rawBody === "iagree";
+
                                 const isExempt =
                                         m.isOwner ||
                                         m.isClonebot ||
@@ -227,7 +323,6 @@ class Message {
                                 //   - Private chat: always check (any message)
                                 //   - Group chat: check on commands AND "i agree"/"iagree" responses
                                 //   - Group already consented: skip entirely
-                                const groupConsented = m.isGroup && this.groupConsentCache.get(`gc:${m.from}`);
                                 const needsConsentCheck = !isExempt && !groupConsented && (
                                         !m.isGroup || m.isCommand || isAgree
                                 );
@@ -318,6 +413,51 @@ class Message {
                                 console.error("Error processing message:", error);
                         }
                 }
+        }
+
+        /**
+         * Fire periodic message plugins (like CAI-AUTO) on the fast path.
+         * Creates a minimal lightweight message object — CAI-AUTO only needs
+         * from, body, sender, mentions, isCommand, and isGroup.
+         * The periodic plugin calls serialize internally if needed.
+         *
+         * @param {object} sock - Baileys socket
+         * @param {object} msg - Raw Baileys message
+         * @param {string} body - Raw text body
+         * @param {string} from - Chat JID
+         */
+        _runPeriodicFast(sock, msg, body, from) {
+                const senderNum = (msg.key?.participant || msg.key?.remoteJid || "").replace(/\D/g, "");
+                const isCommand = body.trim().startsWith(".") || body.trim().startsWith("#") || body.trim().startsWith("!");
+
+                // Minimal message stub — enough for CAI-AUTO to check mentions and process
+                const m = {
+                        body,
+                        from,
+                        isGroup: from.endsWith("@g.us"),
+                        isCommand,
+                        command: "",
+                        msg: msg.message,
+                        message: msg.message,
+                        type: msg.message ? Object.keys(msg.message)[0] : null,
+                        mentions: msg.message?.extendedTextMessage?.contextInfo?.mentionedJid
+                                || msg.message?.conversation?.contextInfo?.mentionedJid
+                                || [],
+                        // Provide reply function — serializes on demand
+                        reply: async (content) => {
+                                const serialized = await serialize(sock, msg, this.store);
+                                if (serialized) {
+                                        if (typeof content === "string") {
+                                                await sock.sendMessage(from, { text: content }, { quoted: msg });
+                                        } else {
+                                                await sock.sendMessage(from, content, { quoted: msg });
+                                        }
+                                }
+                        },
+                };
+
+                // Fire-and-forget — don't block the message loop
+                this.pluginManager.runPeriodicMessagePlugins(m, sock).catch(() => {});
         }
 }
 

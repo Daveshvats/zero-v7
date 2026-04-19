@@ -131,7 +131,7 @@ export default {
                         }
 
                         const { results, isVideo } = session;
-                        const idx = parseInt(m.body.trim());
+                        const idx = parseInt((m.body || "").trim());
                         if (isNaN(idx) || idx < 1 || idx > results.length) {
                                 m.reply(
                                         "Invalid number. Please run the command again to start a new search."

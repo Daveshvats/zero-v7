@@ -38,10 +38,6 @@ export default {
                                                 showProviderList()
                                 );
                         }
-                        const media = await q.download();
-                        const buffer = Buffer.isBuffer(media)
-                                ? media
-                                : Buffer.from(media, "utf-8");
 
                         if (!m.args.length) {
                                 return m.reply(showProviderList());
@@ -53,6 +49,11 @@ export default {
                                         "Invalid, choose a provider.\n\n" + showProviderList()
                                 );
                         }
+
+                        const media = await q.download();
+                        const buffer = Buffer.isBuffer(media)
+                                ? media
+                                : Buffer.from(media, "utf-8");
 
                         m.reply({ text: `${await providers[index].upload(buffer)}`.trim() });
                 } catch (error) {

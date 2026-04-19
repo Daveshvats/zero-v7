@@ -36,6 +36,55 @@ export function getAllCommandsArray() {
         return Array.from(allCmdSet);
 }
 
+/**
+ * Lightweight prefix set for fast-path checks (O(1) hasPrefix lookup).
+ * Built once from the sorted prefixes, avoids array scan on every message.
+ */
+let _prefixSet = new Set();
+
+export function getPrefixSet() {
+        if (_prefixSet.size === 0) {
+                const sortedPrefixes = getSortedPrefixes();
+                for (const p of sortedPrefixes) {
+                        _prefixSet.add(p);
+                }
+        }
+        return _prefixSet;
+}
+
+/**
+ * Fast-path command detection: checks if a raw body starts with any known prefix
+ * and the following word is a known command. No serialize() needed.
+ * Returns { isCommand, command } — only used for routing decisions.
+ *
+ * Owner no-prefix commands are NOT checked here (need isOwner from serialize).
+ * Those fall through to the full pipeline automatically.
+ *
+ * @param {string} body - Raw message text
+ * @returns {{ isCommand: boolean, command: string }}
+ */
+export function quickCommandCheck(body) {
+        if (!body || typeof body !== "string") return { isCommand: false, command: "" };
+
+        const prefixSet = getPrefixSet();
+        // Check if body starts with any known prefix (O(1) per prefix, typically 1-3 prefixes)
+        for (const p of prefixSet) {
+                if (body.startsWith(p)) {
+                        const rest = body.slice(p.length);
+                        // Extract first word after prefix
+                        const spaceIdx = rest.search(/\s/);
+                        const possibleCmd = (spaceIdx === -1 ? rest : rest.slice(0, spaceIdx)).toLowerCase();
+                        if (possibleCmd && allCmdSet.has(possibleCmd)) {
+                                return { isCommand: true, command: possibleCmd };
+                        }
+                        // Starts with prefix but not a known command → prefix-only message, not a command
+                        return { isCommand: false, command: "" };
+                }
+        }
+
+        return { isCommand: false, command: "" };
+}
+
 /*
  * Determines the prefix for a given message body and sender.
  * Owner can use no-prefix or prefix, regular users must use a prefix.

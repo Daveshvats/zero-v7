@@ -48,7 +48,7 @@ export default {
         // Fuzzy match: check if input is a substring of any style, or vice versa
         if (!styleId) {
             styleId = TURN_ME_STYLES.find(s =>
-                s === input || s.includes(input) || input.includes(s)
+                s.includes(input) || input.includes(s)
             );
         }
 

@@ -36,4 +36,5 @@ export const PRIVACY_NOTICE = `
  * Admin number for receiving reports.
  * Replace with the actual owner JID (e.g., "1234567890@s.whatsapp.net").
  */
+// NOTE: Available for future admin notification features
 export const ADMIN_NUMBER = process.env.ADMIN_NUMBER || "0@s.whatsapp.net";

@@ -1,7 +1,7 @@
 import { Colors, colorize } from "#lib/colors";
 
 const log = (type, message, error = null) => {
-        const timestamp = new Date().toLocaleString("id-ID");
+        const timestamp = new Date().toLocaleString(process.env.DATE_LOCALE || "en-US");
         let color;
         switch (type.toUpperCase()) {
                 case "INFO":

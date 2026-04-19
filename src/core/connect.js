@@ -10,6 +10,7 @@ import NodeCache from "@cacheable/node-cache";
 import {
         Browsers,
         DisconnectReason,
+        areJidsSameUser,
         fetchLatestBaileysVersion,
         getAggregateVotesInPollMessage,
         jidNormalizedUser,
@@ -224,7 +225,7 @@ class Connect {
                                         case "add":
                                                 participantJids.forEach((pid) => {
                                                         if (
-                                                                !metadata.participants.some((p) => p.id === pid)
+                                                                !metadata.participants.some((p) => areJidsSameUser(p.id, pid))
                                                         ) {
                                                                 metadata.participants.push({
                                                                         id: pid,
@@ -235,21 +236,24 @@ class Connect {
                                                 break;
                                         case "promote":
                                                 metadata.participants.forEach((p) => {
-                                                        if (participantJids.includes(p.id)) {
+                                                        // FIX: Use areJidsSameUser instead of includes() to handle LID groups
+                                                        // where p.id may be @lid while participantJids contains @s.whatsapp.net
+                                                        if (participantJids.some((jid) => areJidsSameUser(jid, p.id))) {
                                                                 p.admin = "admin";
                                                         }
                                                 });
                                                 break;
                                         case "demote":
                                                 metadata.participants.forEach((p) => {
-                                                        if (participantJids.includes(p.id)) {
+                                                        // FIX: Use areJidsSameUser instead of includes() to handle LID groups
+                                                        if (participantJids.some((jid) => areJidsSameUser(jid, p.id))) {
                                                                 p.admin = null;
                                                         }
                                                 });
                                                 break;
                                         case "remove":
                                                 metadata.participants = metadata.participants.filter(
-                                                        (p) => !participantJids.includes(p.id)
+                                                        (p) => !participantJids.some((jid) => areJidsSameUser(jid, p.id))
                                                 );
                                                 break;
                                 }

@@ -36,7 +36,9 @@ export default {
                         }
 
                         const download = async (url) => {
-                                const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
+                                const res = await fetch(url);
+                                if (!res.ok) throw new Error('Media download failed');
+                                const buf = Buffer.from(await res.arrayBuffer());
                                 const type = await fileTypeFromBuffer(buf);
                                 return { buf, isVideo: type?.mime?.startsWith("video") };
                         };

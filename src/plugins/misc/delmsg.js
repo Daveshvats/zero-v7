@@ -23,15 +23,12 @@ export default {
         execute: async (m, { isAdmin, isOwner, isBotAdmin }) => {
                 try {
                         if (m.quoted) {
-                                if (
-                                        m.isGroup &&
-                                        (isAdmin || isOwner) &&
-                                        isBotAdmin &&
-                                        !m.quoted.fromMe
-                                ) {
-                                        return m.quoted.delete();
+                                // Only allow if sender is deleting their own message, or sender is admin/bot-admin
+                                if (m.quoted.fromMe || m.isAdmin || m.isBotAdmin || m.isOwner) {
+                                        await m.quoted.delete();
+                                } else {
+                                        await m.reply("❌ You can only delete your own messages or need admin privileges.");
                                 }
-                                m.quoted.delete();
                         }
                 } catch (error) {
                         await m.reply(`❌ Error: ${error.message || 'Unknown error occurred'}`);

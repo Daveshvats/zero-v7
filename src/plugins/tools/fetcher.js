@@ -95,8 +95,12 @@ export default {
                         }
 
                         if (/^application\/json/i.test(contentType)) {
-                                const json = JSON.parse(Buffer.from(buffer).toString());
-                                return m.reply(JSON.stringify(json, null, 2));
+                                try {
+                                        const json = JSON.parse(Buffer.from(buffer).toString());
+                                        return m.reply(JSON.stringify(json, null, 2));
+                                } catch (parseError) {
+                                        return m.reply("❌ Failed to parse JSON response: " + (parseError.message || "Invalid JSON"));
+                                }
                         }
 
                         if (/^text\/html/i.test(contentType)) {
@@ -153,7 +157,7 @@ function parseOptions(text = "") {
                 options.json = true;
         }
         if (/--redirect/.test(text)) {
-                options.redirect = true;
+                options.redirect = true; // NOTE: Reserved for future implementation — currently parsed but not used
         }
         if (/--head/.test(text)) {
                 options.head = true;

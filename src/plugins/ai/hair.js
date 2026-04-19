@@ -20,7 +20,7 @@ export default {
     limit: true,
     cooldown: 5,
 
-    async execute(m, { api }) {
+    async execute(m) {
         const args = m.text ? m.text.trim().split(/\s+/) : [];
         const input = args[0] ? args[0].toLowerCase() : null;
 
@@ -59,7 +59,7 @@ export default {
             const submit = await itsrose.post("/image/hair_change", {
                 hair_id: input,
                 init_image: buffer.toString("base64"),
-                sync: true 
+                sync: false
             }).catch(e => e.response);
 
             if (!submit?.data?.ok) {
